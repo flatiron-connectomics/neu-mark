@@ -29,18 +29,20 @@ resolved URL is printed, so the command still says what it read.
 """
 
 
-def _add_common(q: argparse.ArgumentParser, *, instance_hint: str) -> None:
+def _add_common(q: argparse.ArgumentParser, *, instance_hint: str,
+                bodies_required: bool = True) -> None:
     q.add_argument("--src", required=True, metavar="URL",
                    help=_SRC_HELP + f"For this command INSTANCE is {instance_hint}.")
     q.add_argument("--out", required=True, metavar="DST",
                    help="where the tables go — a local directory or s3://bucket/prefix. "
                         "May contain {uuid}, {uuid:N}, {uuid:full}, {branch} or "
                         "{instance}, expanded from the resolved node.")
-    q.add_argument("--bodies", required=True, metavar="IDS",
+    q.add_argument("--bodies", required=bodies_required, metavar="IDS", default=None,
                    help="body ids: inline (123,456), or a path to a .csv/.parquet/"
                         ".feather with a body column, or a text file with one id per "
-                        "line. Required — DVID cannot cheaply enumerate the bodies "
-                        "worth asking about.")
+                        "line." + ("" if bodies_required else " Omit it only with --all.")
+                        + (" Required — DVID cannot cheaply enumerate the bodies worth "
+                           "asking about." if bodies_required else ""))
     q.add_argument("--body-column", metavar="NAME", default=None,
                    help="which column holds the ids, when --bodies is a table with "
                         "several and none is named recognisably.")
@@ -99,12 +101,21 @@ def build_parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_points)
 
     q = sub.add_parser(
-        "bodies", help="per-body annotations (name, status) for a set of bodies",
+        "bodies", help="per-body annotations (name, status), for a body list or all of them",
         description="Fetch the per-body records from a DVID `keyvalue` instance and write "
-                    "a `bodies` table, one row per body. Records are ragged, so the "
-                    "table is the union of the fields present.",
+                    "a `bodies` table, one row per body. Records are ragged, so the table "
+                    "is the union of the fields present.\n\n"
+                    "--all reads the WHOLE instance, which is a different population and "
+                    "often the one you want: a >=10-synapse selection holds 117 glia while "
+                    "the instance holds 1,014, because most glia sit below any synapse "
+                    "threshold. It reads a partition of the key space rather than asking "
+                    "for the key list, which is unreliable at this size.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    _add_common(q, instance_hint="a keyvalue instance, e.g. 'labels_annotations'")
+    _add_common(q, instance_hint="a keyvalue instance, e.g. 'labels_annotations'",
+                bodies_required=False)
+    q.add_argument("--all", dest="everything", action="store_true",
+                   help="every record in the instance, instead of a body list. Mutually "
+                        "exclusive with --bodies.")
     q.set_defaults(func=cmd_bodies)
 
     q = sub.add_parser(
@@ -300,16 +311,28 @@ def cmd_points(args) -> int:
 def cmd_bodies(args) -> int:
     from . import ops
 
+    everything = bool(getattr(args, "everything", False))
+    if everything and args.bodies:
+        raise SystemExit(
+            "--all and --bodies describe different populations; pass one, not both.")
+    if not everything and not args.bodies:
+        raise SystemExit(
+            "--bodies is required, or pass --all to read the whole instance.")
+
     source = ops.open_bodies_source(_src_spec(args.src),
                                     prefer_locked=bool(args.dvid_locked))
     out = _expand_out(args.out, source)
-    ids = _load_bodies(args)
+    ids = None if everything else _load_bodies(args)
 
-    result = ops.fetch_bodies(source, out, ids, fmt=args.fmt)
-    print(f"bodies: {result['found']} of {result['requested']} had a record")
-    if result["missing"]:
-        print(f"  {len(result['missing'])} had none (not an error — DVID simply has no "
-              f"annotation for them)")
+    result = ops.fetch_bodies(source, out, ids, fmt=args.fmt, everything=everything)
+    if everything:
+        print(f"bodies: {result['found']} records across "
+              f"{len(result['ranges'])} key ranges")
+    else:
+        print(f"bodies: {result['found']} of {result['requested']} had a record")
+        if result["missing"]:
+            print(f"  {len(result['missing'])} had none (not an error — DVID simply has no "
+                  f"annotation for them)")
     print(f"wrote {', '.join(result['written'])} to {out}")
     return 0
 

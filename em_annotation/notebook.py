@@ -174,6 +174,24 @@ def body_annotations(location="bodies", bodies=None, *, locked: bool = False, co
     return _dvid.fetch_body_annotations(src, body_ids(bodies))["bodies"]
 
 
+def all_body_annotations(location="bodies", *, locked: bool = False, config=None):
+    """Every record in the property keyvalue instance, as one row per body.
+
+    A different population from :func:`body_annotations` over a selected list, and the
+    difference is large: the ≥10-synapse selection holds 117 glia against **1,014** in the
+    instance, because most glia sit below any synapse threshold. Use this to ask what is
+    annotated in the dataset at all; use the body-list form to ask about a chosen set.
+
+    Reads a partition of the key space rather than calling ``/keys``, which is unreliable at
+    this size — 58,394 records in ~57 s. There is no cheap count, and none is needed.
+    """
+    src = _as_source(location, "bodies", locked, config)
+    from . import tables as _tables
+
+    return _tables.keyvalues_to_frame(
+        _dvid.fetch_all_body_annotations(src)["records"])
+
+
 def synapse_counts(location="counts", bodies=None, *, locked: bool = False, config=None):
     """Exact ``PreSyn``/``PostSyn`` counts for specific bodies, ignoring any threshold.
 

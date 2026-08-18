@@ -15,10 +15,21 @@ way, so a config can never make an export less traceable.
 Search order (first hit wins):
 
 1. ``$EM_ANNOTATION_CONFIG``
-2. ``./em-annotation.toml`` in the current directory
-3. ``~/.config/em-annotation/config.toml``
+2. ``em-annotation.toml`` in the current directory **or any parent** — so one file at the
+   workspace root serves every repo and every notebook subdirectory under it, the way
+   ``pyproject.toml`` and ``.git`` are found.
+
+There is deliberately **no machine-wide location**. A config in the tree is one you trip over
+while working, next to the body lists and the notes it goes with; a hidden one in
+``~/.config`` applies to every shell on the host and is exactly the kind of invisible state
+that makes a command behave differently for two people running it.
+
+The upward walk is what makes a config in the tree usable: notebooks live a couple of
+directories down from where the file naturally sits, and requiring the cwd to match exactly
+would mean it silently stopped being found depending on where Jupyter was started.
 
 ```toml
+# em-annotation.toml, at the workspace root
 [dvid]
 server = "dvid.example.org"
 uuid    = "93fdbc:main"      # a branch ref is fine; it is resolved per run
@@ -44,8 +55,10 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-#: Where to look, in order. Relative entries are resolved against the cwd.
-SEARCH = ("./em-annotation.toml", "~/.config/em-annotation/config.toml")
+#: The filename looked for in the cwd and every parent directory. The only place a config is
+#: ever found, other than $EM_ANNOTATION_CONFIG — see the module docstring for why there is
+#: no machine-wide location.
+FILENAME = "em-annotation.toml"
 
 #: The environment variable that overrides the search entirely.
 ENV_VAR = "EM_ANNOTATION_CONFIG"
@@ -115,9 +128,8 @@ class Config:
             raise ValueError(f"{value!r} names nothing after {REFERENCE_PREFIX!r}")
         if name not in self.instances and not self.server:
             raise ValueError(
-                f"--src {value!r} is a config reference, but no config was found. Looked "
-                f"at ${ENV_VAR}, ./em-annotation.toml and "
-                f"~/.config/em-annotation/config.toml.")
+                f"--src {value!r} is a config reference, but no config was found. Looked at "
+                f"${ENV_VAR}, then for {FILENAME} in the working directory and every parent.")
         if name not in self.instances:
             # Allowed, but say so: a typo would otherwise become a request for a
             # nonexistent DVID instance and fail much further along.
@@ -135,8 +147,12 @@ def _read(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def find() -> str | None:
-    """The config file that would be used, or ``None``."""
+def find(start: str | Path | None = None) -> str | None:
+    """The config file that would be used, or ``None``.
+
+    Walks up from ``start`` (the cwd by default) looking for :data:`FILENAME`, then falls
+    back to :data:`SEARCH`.
+    """
     explicit = os.environ.get(ENV_VAR)
     if explicit:
         # An explicit path that does not exist is an error, not something to fall through:
@@ -145,10 +161,15 @@ def find() -> str | None:
             raise FileNotFoundError(
                 f"${ENV_VAR} points at {explicit!r}, which is not a file")
         return str(Path(explicit).expanduser())
-    for candidate in SEARCH:
-        p = Path(candidate).expanduser()
-        if p.is_file():
-            return str(p)
+
+    here = Path(start).expanduser().resolve() if start else Path.cwd().resolve()
+    if here.is_file():
+        here = here.parent
+    # `here` then all parents, nearest first — so a repo-local file beats a workspace one.
+    for directory in (here, *here.parents):
+        candidate = directory / FILENAME
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 

@@ -35,6 +35,7 @@ _LAZY = {
     "select_bodies": "notebook",
     "points": "notebook",
     "body_annotations": "notebook",
+    "all_body_annotations": "notebook",
     "synapse_counts": "notebook",
     "body_ids": "notebook",
     "rule": "rules",

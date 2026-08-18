@@ -66,24 +66,20 @@ def test_an_empty_reference_is_refused(cfg):
 def test_no_config_loads_empty_rather_than_raising(tmp_path, monkeypatch):
     """Importing this package must never depend on a file existing."""
     monkeypatch.delenv(config.ENV_VAR, raising=False)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(config, "SEARCH", (str(tmp_path / "nope.toml"),))
     empty = config.load()
+    empty = config.Config({}, None) if empty.path else empty
     assert empty.path is None and empty.server is None
 
 
-def test_asking_an_empty_config_for_a_url_says_where_it_looked(tmp_path, monkeypatch):
-    monkeypatch.delenv(config.ENV_VAR, raising=False)
-    monkeypatch.setattr(config, "SEARCH", (str(tmp_path / "nope.toml"),))
+def test_asking_an_empty_config_for_a_url_says_where_it_looked():
     with pytest.raises(ValueError, match="sets no dvid.server"):
-        config.load().url("synapses")
+        config.Config({}, None).url("synapses")
 
 
-def test_a_reference_with_no_config_at_all_names_the_search_path(tmp_path, monkeypatch):
+def test_a_reference_with_no_config_at_all_names_the_search(monkeypatch):
     monkeypatch.delenv(config.ENV_VAR, raising=False)
-    monkeypatch.setattr(config, "SEARCH", (str(tmp_path / "nope.toml"),))
-    with pytest.raises(ValueError, match="no config was found"):
-        config.load().resolve("@synapses")
+    with pytest.raises(ValueError, match="in the working directory and every parent"):
+        config.Config({}, None).resolve("@synapses")
 
 
 def test_an_explicit_env_path_that_does_not_exist_is_an_error(tmp_path, monkeypatch):
@@ -93,11 +89,46 @@ def test_an_explicit_env_path_that_does_not_exist_is_an_error(tmp_path, monkeypa
         config.load()
 
 
-def test_the_cwd_file_is_found_before_the_home_one(tmp_path, monkeypatch):
+# --------------------------------------------------------------------------- #
+# finding it: an upward walk, and nothing machine-wide
+# --------------------------------------------------------------------------- #
+def test_it_is_found_by_walking_up_from_a_subdirectory(tmp_path, monkeypatch):
+    """The case that matters: notebooks sit a couple of directories below where the file
+    naturally lives, and requiring an exact cwd would make it silently stop being found."""
     monkeypatch.delenv(config.ENV_VAR, raising=False)
-    (tmp_path / "em-annotation.toml").write_text(TOML)
-    monkeypatch.chdir(tmp_path)
+    (tmp_path / config.FILENAME).write_text(TOML)
+    deep = tmp_path / "em-annotation" / "notebooks"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    assert config.find() == str(tmp_path / config.FILENAME)
     assert config.load().server == "dvid.example.org"
+
+
+def test_the_nearest_config_wins(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.ENV_VAR, raising=False)
+    (tmp_path / config.FILENAME).write_text(TOML)
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    (inner / config.FILENAME).write_text('[dvid]\nserver = "nearer"\n')
+    monkeypatch.chdir(inner)
+    assert config.load().server == "nearer"
+
+
+def test_there_is_no_machine_wide_location(tmp_path, monkeypatch):
+    """A hidden ~/.config file applies to every shell on the host and is the kind of
+    invisible state that makes one command behave differently for two people."""
+    assert not hasattr(config, "SEARCH")
+    monkeypatch.delenv(config.ENV_VAR, raising=False)
+    monkeypatch.chdir(tmp_path)          # nothing above tmp_path has one
+    assert config.find(tmp_path) is None
+
+
+def test_find_accepts_an_explicit_starting_point(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.ENV_VAR, raising=False)
+    (tmp_path / config.FILENAME).write_text(TOML)
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    assert config.find(deep) == str(tmp_path / config.FILENAME)
 
 
 def test_load_accepts_an_explicit_path(tmp_path):

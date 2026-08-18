@@ -130,7 +130,7 @@ def near(token_frame: pd.DataFrame, target: str, *, cutoff: float = 0.72,
     """Tokens close enough to ``target`` to be misspellings of it, with their weight.
 
     The mechanism for the "catch the misspellings" problem. Fuzzy rather than exact
-    because the real variants are unguessable in advance — on dvid.example.org this surfaces
+    because the real variants are unguessable in advance — on our dataset this surfaces
     ``truncated?`` (8 bodies) and a trailing-space ``truncated `` (3) that a controlled
     vocabulary would otherwise silently treat as unknown tokens.
     """
@@ -295,7 +295,7 @@ def compare(frame: pd.DataFrame, field: str, against: Callable, *,
 
     Tidy output rather than a summary, so a notebook can do both — ``.relation
     .value_counts()`` for the table, ``[df.relation == "unrelated"]`` for the cases worth
-    reading. Two fields disagreeing is not necessarily an error: on dvid.example.org ``type``
+    reading. Two fields disagreeing is not necessarily an error: on our dataset ``type``
     is often the *coarser* label (``LMC`` against an instance of ``L1/L3_D4(R)``), which is
     a difference of grain, not a mistake. Deciding which to trust is a judgement about the
     dataset and this function exists to inform it, not to make it.

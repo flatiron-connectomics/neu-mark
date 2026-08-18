@@ -33,7 +33,7 @@ you build that list.
 ### Choosing the bodies
 
 `select-bodies` ranks by **synapse count**, using the `labelsz` index DVID already
-maintains — `AllSyn >= 10` returns 21,116 bodies in ~20 s on dvid.example.org. Point `--src` at
+maintains — `AllSyn >= 10` returns 21,116 bodies in ~20 s on our dataset. Point `--src` at
 either the `labelsz` instance or the annotation instance it indexes (`synapses`), and its
 `Base.Syncs` is used to find the index.
 
@@ -146,7 +146,7 @@ A DVID relationship points at a **coordinate, not a body**. The partner's body i
 recovered by joining that coordinate against the elements table — which works because
 elements are fetched *per body*, so every row already knows its own body. But an edge only
 resolves when **both** endpoints were fetched, so the yield depends on how much of the
-connectome `--bodies` covers. Measured against dvid.example.org, top-N bodies by presynapse
+connectome `--bodies` covers. Measured on our dataset, top-N bodies by presynapse
 count:
 
 | bodies | points | distinct pairs | both ends resolved |
@@ -160,6 +160,24 @@ kept as nulls rather than dropped. `--drop-unmatched` exists for once the rate i
 dropping earlier turns "the body list did not cover this partner" into "this synapse does
 not exist", which at low coverage presents a mostly-incomplete connectome as a complete
 one.
+
+## Reading the whole instance
+
+```bash
+em-annot bodies --src @bodies --all --out 'all_bodies_{uuid:8}/' --dvid-locked
+```
+
+This **never calls `/keys`**, which is unreliable at this size — 58,394 keys took 52 s twice
+and then returned `504 Gateway Time-out` from the proxy in front of DVID, and there is no
+count endpoint to use instead. It reads a *cover of the key space* as bounded
+`keyrangevalues` requests, so completeness comes from the cover being exhaustive rather than
+from knowing a total. Values cost essentially nothing over keys (56.7 s against 54.3 s).
+
+Two properties of DVID worth knowing if you use the underlying functions directly: its key
+ranges are **inclusive at both ends**, so consecutive ranges overlap by one key and summing
+per-range counts overcounts; and a range that is too big to finish inside the proxy's window
+is **subdivided rather than retried**, because repeating it unchanged just fails again more
+slowly.
 
 ## In a notebook
 
@@ -185,8 +203,14 @@ in for a full URL. It is a **URL builder, not a fallback**: nothing consults it 
 `@name` is required so a saved command visibly depends on it, and both the CLI and the
 library print what a reference resolved to.
 
+It is found as `em-annotation.toml` in the working directory **or any parent**, so one file at
+the workspace root serves every repo and every notebook subdirectory beneath it — the way
+`pyproject.toml` is found. `$EM_ANNOTATION_CONFIG` overrides. There is deliberately **no
+machine-wide location**: a hidden `~/.config` file applies to every shell on the host and is
+the kind of invisible state that makes one command behave differently for two people.
+
 ```toml
-# ./em-annotation.toml, or ~/.config/em-annotation/config.toml, or $EM_ANNOTATION_CONFIG
+# em-annotation.toml, at the workspace root
 [dvid]
 server = "dvid.example.org"
 uuid   = "93fdbc:main"
@@ -196,6 +220,9 @@ locked = true
 synapses = "synapses"
 bodies   = "labels_annotations"
 counts   = "synapses_labelsz"
+
+[roi_sets]
+neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AGNG", "PGNG"]
 ```
 
 ```console

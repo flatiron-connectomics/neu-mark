@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 from . import dvid as _dvid
 from . import io as _io
+from . import tables as _tables
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +164,42 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
             "written": written, "record": record}
 
 
-def fetch_bodies(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
-                 fmt: str = "parquet") -> dict[str, Any]:
-    """Body annotations for ``bodies`` -> a ``bodies`` table.
+def fetch_bodies(source: Mapping[str, Any], dst: str,
+                 bodies: Sequence[int] | None = None, *,
+                 fmt: str = "parquet", everything: bool = False) -> dict[str, Any]:
+    """Body annotations -> a ``bodies`` table, for a body list or the whole instance.
 
     ``source`` comes from :func:`open_bodies_source`; it carries a concrete uuid.
+
+    ``everything=True`` reads every record rather than a list. That is a genuinely different
+    population and worth having: the ≥10-synapse selection holds 117 glia, while the instance
+    holds **1,014** — nine times as many — because most glia sit below any synapse threshold.
+    Anything asking "what is annotated in this dataset" needs the whole set, not a slice of
+    it. It goes through a partition of the key space rather than ``/keys``; see
+    ``dvid.fetch_all_body_annotations`` for why that endpoint is unusable here.
 
     A separate destination from the point tables on purpose: they come from a different
     instance, they are a different grain (one row per body, not per element), and nothing
     joins them at write time.
     """
+    if everything:
+        if bodies:
+            raise ValueError(
+                "pass a body list or everything=True, not both — they describe different "
+                "populations and silently intersecting them would be a surprise.")
+        pulled = _dvid.fetch_all_body_annotations(source)
+        frame = _tables.keyvalues_to_frame(pulled["records"])
+        run = {"whole_instance": True, "key_ranges": pulled["ranges"],
+               "bodies_found": int(len(frame))}
+        record = _record(source, dst, run=run)
+        written = [_io.write_table(frame, dst, "bodies", fmt=fmt, metadata=record)]
+        _io.write_provenance(dst, record)
+        return {"bodies": frame, "requested": None, "found": int(len(frame)),
+                "missing": [], "ranges": pulled["ranges"], "written": written,
+                "record": record}
+
+    if not bodies:
+        raise ValueError("fetch_bodies needs a body list, or everything=True")
     result = _dvid.fetch_body_annotations(source, bodies)
     frame = result["bodies"]
 

@@ -28,7 +28,7 @@ markers DVID produces; and failures collected per body rather than raised, becau
 over thousands of bodies should report the three that failed and keep the rest.
 
 **Thread count is deliberately modest.** DVID is a shared service and answers overload
-with 503. Measured against dvid.example.org: 400 bodies in 19.7 s at 8 threads, so ~16 min for
+with 503. Measured on our dataset: 400 bodies in 19.7 s at 8 threads, so ~16 min for
 20k bodies — fast enough that pointing a dask fleet at a shared server buys nothing worth
 the risk.
 """
@@ -486,6 +486,159 @@ def label_point_rois(source: Mapping[str, Any], points, rois: Sequence[str], *,
             "unlabeled": unlabeled, "overlapping": overlapping,
             "ambiguous": ambiguous, "ambiguous_pairs": ambiguous_counts,
             "counts": counts}
+
+
+# --------------------------------------------------------------------------- #
+# the whole keyvalue instance, without asking for its key list
+# --------------------------------------------------------------------------- #
+#: DVID's own full-range bounds for a keyvalue query, which is what neuclease defaults to.
+_RANGE_LO = " "
+_RANGE_HI = chr(ord("~") + 1)
+
+#: Boundaries covering the printable key space in bounded requests. Every consecutive pair is
+#: one request, and the union covers everything from ``" "`` to ``"~"`` — so **completeness
+#: comes from the cover, not from knowing a total**. Body-id keys are decimal strings, so the
+#: digit boundaries do the real work; the two outer ranges catch a non-numeric key (a schema
+#: or config document) that would otherwise be silently missed.
+DEFAULT_KEY_BOUNDARIES = (_RANGE_LO, *"0123456789", ":", _RANGE_HI)
+
+
+def key_ranges(boundaries: Sequence[str] = DEFAULT_KEY_BOUNDARIES
+               ) -> list[tuple[str, str]]:
+    """Consecutive pairs of ``boundaries`` as ``(key1, key2)`` request bounds.
+
+    **DVID's key range is INCLUSIVE at both ends**, not half-open — its own documentation
+    calls ``key2`` the "maximal key" and notes that ``'a'``..``'z'`` catches a single ``'z'``.
+    So consecutive ranges built this way *overlap by exactly one key* wherever a key equals a
+    boundary, and a body literally numbered ``3`` comes back from both ``'2'``..``'3'`` and
+    ``'3'``..``'4'``.
+
+    That is harmless for completeness — an overlapping cover misses nothing, and collecting
+    into a dict de-duplicates — but it does mean **summing the per-range counts overcounts**.
+    Measured: ``fetch_keyrange`` totalled 58,395 keys across these ranges while
+    ``fetch_keyrangevalues`` yielded 58,394 distinct records, the difference being boundary
+    key ``'3'`` counted twice.
+    """
+    bounds = list(boundaries)
+    if len(bounds) < 2:
+        raise ValueError("need at least two boundaries to make a range")
+    if sorted(bounds) != bounds:
+        raise ValueError(f"boundaries must be sorted; got {bounds}")
+    return [(a, b) for a, b in zip(bounds, bounds[1:]) if a != b]
+
+
+#: How many times a failing key range may be subdivided. Each level multiplies the request
+#: count by eleven, so depth 2 allows ~121 sub-ranges per top-level range — about 134 records
+#: each for the biggest bucket here, comfortably inside any plausible proxy window. Kept low
+#: on purpose: depth 3 is ~16,000 requests in the worst case, which turns a broken server into
+#: an hours-long failure instead of a quick one.
+#: A dead server is reported after only a handful of requests without needing a failure
+#: budget: the first sub-range of any split is ``lo``..``lo + '0'``, which has nothing
+#: strictly between its bounds and so cannot be subdivided — see :func:`refine`. That guard
+#: fires immediately, so total failure surfaces in under ten requests rather than exhausting
+#: the recursion.
+MAX_SPLIT_DEPTH = 2
+
+
+def refine(lo: str, hi: str) -> list[str]:
+    """Boundaries subdividing ``[lo, hi]`` by appending one digit to ``lo``.
+
+    ``'1'``..``'2'`` becomes ``'1', '10', '11', … '19', '2'``, which works because these keys
+    are decimal strings sorted lexicographically: ``'1' < '10' < … < '19' < '2'``. Each
+    sub-range is roughly a tenth of the original.
+
+    This is what makes the read self-tuning, and it is needed rather than optional. A fixed
+    coarse grid is not enough: the ``'1'``..``'2'`` range holds 16,225 records and, having
+    once completed in 13.7 s, later **504'd twice in a row** at about 60 s each — the proxy
+    window is fixed but the server's speed is not, so any static bucket size is a bet on load.
+    Splitting on failure removes the bet, and keeps the common case at a dozen requests
+    because subdivision only happens where it is needed.
+
+    Candidates outside ``(lo, hi)`` are dropped, which is not a detail: ``hi`` is not always
+    the next character after ``lo``. Splitting ``' '``..``'0'`` yields ``' 0'``..``' 9'``, and
+    splitting *that* again would put ``' 0'`` after ``' 9'`` and produce unsorted boundaries.
+    Returns ``[lo, hi]`` unchanged when no candidate falls strictly between them — the caller
+    reads that as "cannot subdivide further" rather than looping.
+    """
+    inner = [lo + d for d in "0123456789"]
+    return [lo, *(m for m in inner if lo < m < hi), hi]
+
+
+def fetch_all_body_annotations(source: Mapping[str, Any], *,
+                               boundaries: Sequence[str] = DEFAULT_KEY_BOUNDARIES
+                               ) -> dict[str, Any]:
+    """Every record in a keyvalue instance, fetched as a series of bounded key ranges.
+
+    **Deliberately never calls ``/keys``.** On a large instance that endpoint is unreliable
+    rather than merely slow: measured on `labels_annotations` (58,394 keys) it took 52 s
+    twice and then returned **504 Gateway Time-out** from the nginx proxy in front of DVID.
+    A call that succeeds in testing and fails intermittently in production is the worst thing
+    to build on, and there is no count endpoint to use instead — ``/keys`` always returns the
+    whole list.
+
+    So the instance is read as ``keyrangevalues`` over a cover of the key space. Three things
+    follow, and all of them matter:
+
+    - **No total is needed.** The ranges are exhaustive by construction, so every key is in at
+      least one; there is nothing to compare a count against and nothing to stop early.
+    - **Values are nearly free.** Measured 56.7 s for all 58,394 records (~4.9 MB) against
+      54.3 s for the keys alone, worst single request 13.7 s. There is never a reason to
+      fetch keys and then values separately.
+    - **The ranges overlap by one key at each boundary**, because DVID's bounds are inclusive
+      (see :func:`key_ranges`). Collecting into a dict de-duplicates, so the result is right —
+      but a boundary key legitimately arrives twice and that is not an error.
+
+    Pass finer ``boundaries`` (two-character prefixes, say) if an instance ever grows enough
+    that one range starts timing out; the cover property holds for any sorted list.
+    """
+    try:
+        from neuclease.dvid.keyvalue import fetch_keyrangevalues
+    except ImportError as exc:
+        raise ImportError(MISSING) from exc
+
+    server, uuid, instance = _vdvid.address(source)
+    records: dict[str, Any] = {}
+    per_range: list[dict] = []
+
+    def fetch(lo: str, hi: str, depth: int) -> None:
+        try:
+            # ONE attempt, no backoff sleep: a 504 here means the request could not finish
+            # inside the proxy's window, and repeating it unchanged just fails again more
+            # slowly (measured: two 60 s attempts on the same range, both 504). Splitting is a
+            # strictly better retry — a smaller request is more likely to succeed than the
+            # same one again — so go straight to it rather than sleeping first.
+            got = fetch_keyrangevalues(server, uuid, instance, lo, hi, as_json=True) or {}
+        except Exception as exc:                                  # noqa: BLE001
+            parts = key_ranges(refine(lo, hi))
+            if depth >= MAX_SPLIT_DEPTH or len(parts) < 2:
+                raise RuntimeError(
+                    f"[{lo!r},{hi!r}] still fails and cannot usefully be split further "
+                    f"(depth {depth} of {MAX_SPLIT_DEPTH}): "
+                    f"{type(exc).__name__}: {exc}") from exc
+            logger.warning("[%r,%r] failed (%s); splitting it and fetching the parts",
+                           lo, hi, type(exc).__name__)
+            for sub_lo, sub_hi in parts:
+                fetch(sub_lo, sub_hi, depth + 1)
+            return
+
+        # Boundary keys arrive twice because DVID's bounds are inclusive, which is expected.
+        # A repeat carrying a DIFFERENT value is not: that would mean the instance answered
+        # inconsistently across two requests, and the dict update would silently pick one.
+        inconsistent = [k for k in set(got) & set(records) if got[k] != records[k]]
+        if inconsistent:
+            raise RuntimeError(
+                f"key(s) {sorted(inconsistent)[:3]} came back with different values from "
+                f"two key ranges. The instance changed mid-read, or the server answered "
+                f"inconsistently — either way this snapshot is not coherent.")
+        records.update(got)
+        per_range.append({"lo": lo, "hi": hi, "records": len(got), "depth": depth})
+        logger.info("fetched %d records from [%r,%r] — %d so far",
+                    len(got), lo, hi, len(records))
+
+    for lo, hi in key_ranges(boundaries):
+        fetch(lo, hi, 0)
+
+    return {"records": records, "ranges": per_range}
 
 
 def node_record(source: Mapping[str, Any], **extra: Any) -> dict[str, Any]:

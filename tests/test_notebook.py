@@ -121,7 +121,9 @@ def test_a_bare_name_without_a_config_says_what_to_do(monkeypatch, tmp_path):
     from em_annotation import config
 
     monkeypatch.delenv(config.ENV_VAR, raising=False)
-    monkeypatch.setattr(config, "SEARCH", (str(tmp_path / "nope.toml"),))
+    # No config anywhere above a fresh tmp dir, so the upward walk finds nothing.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config, "find", lambda start=None: None)
     with pytest.raises(ValueError, match="no config was found to build one from"):
         nb.source("synapses")
 

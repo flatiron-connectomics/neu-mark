@@ -28,7 +28,7 @@ elements table — which works precisely because elements were fetched *per body
 row already carries the body it came from.
 
 That join only resolves an edge when **both** endpoints were fetched, so its yield is a
-function of how much of the connectome the body list covers. Measured against dvid.example.org,
+function of how much of the connectome the body list covers. Measured on our dataset,
 taking the top-N bodies by presynapse count: 20 bodies resolved 0.2% of pairs, 100 → 2.0%,
 400 → 4.6%. This is why :func:`match_rate` exists and why the CLI reports it as a headline
 number: a low rate means the body list is too small, and it looks exactly like a sparse
@@ -294,7 +294,7 @@ def body_roi_counts(points: pd.DataFrame, *, kind_column: str = "kind") -> pd.Da
 def keyvalues_to_frame(values: Mapping[str, Any]) -> pd.DataFrame:
     """``{body_key: json}`` from a keyvalue instance -> one row per body.
 
-    The records are **ragged** — on dvid.example.org some bodies carry ``user`` and
+    The records are **ragged** — on our dataset some bodies carry ``user`` and
     ``instance_user`` and others do not — so this normalizes to the union of keys, with
     missing fields left null.
 

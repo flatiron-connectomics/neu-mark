@@ -231,7 +231,20 @@ def dvid_server(monkeypatch):
     def fetch_keyvalues(server, uuid, instance, keys, **k):
         return {key: BODY_RECORDS.get(key) for key in keys}
 
+    def fetch_keyrangevalues(server, uuid, instance, key1, key2, **k):
+        """Bounds INCLUSIVE at both ends, as DVID's really are — so consecutive ranges
+        overlap by one key and the caller must tolerate a repeat."""
+        return {key: v for key, v in BODY_RECORDS.items() if key1 <= key <= key2}
+
     monkeypatch.setattr(ndk, "fetch_keyvalues", fetch_keyvalues)
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", fetch_keyrangevalues)
+
+    def no_keys(*a, **k):
+        raise AssertionError(
+            "fetch_keys is unreliable on a large instance (52 s twice, then 504 from the "
+            "proxy) and nothing may depend on it")
+
+    monkeypatch.setattr(ndk, "fetch_keys", no_keys)
     return asked
 
 

@@ -160,6 +160,208 @@ def test_an_annotation_instance_is_refused_for_bodies(tmp_path, dvid_server):
 
 
 # --------------------------------------------------------------------------- #
+# the whole instance, without asking for its key list
+# --------------------------------------------------------------------------- #
+def test_the_whole_instance_is_read_without_ever_calling_keys(tmp_path, dvid_server,
+                                                              monkeypatch):
+    """`/keys` is unreliable at this size — 52 s twice, then 504 from the proxy — and there is
+    no count endpoint, so nothing here may depend on it."""
+    import neuclease.dvid.keyvalue as ndk
+
+    def boom(*a, **k):
+        raise AssertionError("fetch_keys must never be called")
+
+    monkeypatch.setattr(ndk, "fetch_keys", boom)
+    out = str(tmp_path / "all")
+    result = ops.fetch_bodies(_open(KV_URL, "bodies"), out, everything=True)
+    assert result["found"] == len(BODY_RECORDS)
+    assert set(io.read_table(out, "bodies")["body"]) == {1, 2}
+
+
+def test_the_key_ranges_are_recorded_in_the_provenance(tmp_path, dvid_server):
+    from em_volume_tools.location import read_json
+
+    out = str(tmp_path / "all")
+    ops.fetch_bodies(_open(KV_URL, "bodies"), out, everything=True)
+    run = read_json(out, "provenance.json")["run"]
+    assert run["whole_instance"] is True
+    assert len(run["key_ranges"]) >= 2 and run["bodies_found"] == len(BODY_RECORDS)
+
+
+def test_a_body_list_and_all_are_mutually_exclusive(tmp_path, dvid_server):
+    """They describe different populations — the >=10-synapse set holds 117 glia against
+    1,014 in the instance — so silently intersecting them would be a surprise."""
+    with pytest.raises(ValueError, match="not both"):
+        ops.fetch_bodies(_open(KV_URL, "bodies"), str(tmp_path / "o"), [1],
+                         everything=True)
+    with pytest.raises(ValueError, match="needs a body list, or everything=True"):
+        ops.fetch_bodies(_open(KV_URL, "bodies"), str(tmp_path / "o"))
+
+
+def test_a_boundary_key_arriving_twice_is_not_an_error(dvid_server, monkeypatch):
+    """DVID's key range is INCLUSIVE at both ends, so consecutive ranges overlap by one key.
+    That is why summing per-range counts overcounts (58,395 against 58,394 real records)."""
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    def overlapping(server, uuid, instance, lo, hi, **k):
+        # every range returns the same boundary record, as an inclusive bound would
+        return {"3": {"bodyid": 3, "instance": "shared"}}
+
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", overlapping)
+    got = ad.fetch_all_body_annotations(_open(KV_URL, "bodies"))
+    assert set(got["records"]) == {"3"}
+
+
+def test_the_same_key_with_different_values_is_an_error(dvid_server, monkeypatch):
+    """A repeat is expected; a repeat that disagrees means the snapshot is not coherent."""
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    seen = {"n": 0}
+
+    def inconsistent(server, uuid, instance, lo, hi, **k):
+        seen["n"] += 1
+        return {"3": {"bodyid": 3, "instance": f"changed-{seen['n']}"}}
+
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", inconsistent)
+    with pytest.raises(RuntimeError, match="not coherent"):
+        ad.fetch_all_body_annotations(_open(KV_URL, "bodies"))
+
+
+def test_a_failing_range_is_split_rather_than_retried_whole(dvid_server, monkeypatch):
+    """The '1'..'2' range holds 16,225 records; it once completed in 13.7 s and later 504'd
+    twice at ~60 s each. The proxy window is fixed but the server's speed is not, so any
+    static bucket size is a bet on load — splitting on failure removes the bet."""
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    attempted = []
+
+    def too_big(server, uuid, instance, lo, hi, **k):
+        attempted.append((lo, hi))
+        if (lo, hi) == ("1", "2"):
+            raise RuntimeError("504 Server Error: Gateway Time-out")
+        return {"11": {"bodyid": 11}} if lo == "11" else {}
+
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", too_big)
+    got = ad.fetch_all_body_annotations(_open(KV_URL, "bodies"))
+    assert set(got["records"]) == {"11"}
+    # it split '1'..'2' into sub-ranges rather than repeating the whole thing
+    assert ("1", "10") in attempted and ("11", "12") in attempted
+    # exactly ONE attempt at the failing range — no sleep-and-repeat, because repeating a
+    # request that timed out just fails again more slowly
+    assert attempted.count(("1", "2")) == 1
+
+
+def test_splitting_gives_up_at_a_bounded_depth(dvid_server, monkeypatch):
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    monkeypatch.setattr(ad, "MAX_SPLIT_DEPTH", 1)
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("504 nope")))
+    with pytest.raises(RuntimeError, match="cannot usefully be split further"):
+        ad.fetch_all_body_annotations(_open(KV_URL, "bodies"))
+
+
+def test_refine_drops_candidates_outside_the_range():
+    """`hi` is not always the next character after `lo`: splitting ' '..'0' gives ' 0'..' 9',
+    and splitting that again would put ' 0' after ' 9' and produce unsorted boundaries."""
+    from em_annotation import dvid as ad
+
+    assert ad.refine(" ", " 0") == [" ", " 0"]        # nothing strictly between
+    inner = ad.refine(" ", "0")
+    assert inner == sorted(inner) and inner[1] == " 0"
+
+
+def test_a_dead_server_fails_quickly_rather_than_recursing(dvid_server, monkeypatch):
+    """Splitting is the right answer to ONE range being too big and the wrong answer to the
+    server being down; without a budget the two look identical until the recursion exhausts
+    itself, which at depth 3 was ~16,000 requests."""
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    calls = {"n": 0}
+
+    def dead(*a, **k):
+        calls["n"] += 1
+        raise RuntimeError("504 Server Error: Gateway Time-out")
+
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", dead)
+    with pytest.raises(RuntimeError):
+        ad.fetch_all_body_annotations(_open(KV_URL, "bodies"))
+    # A handful of requests, not the full recursion. Whichever guard trips first is fine —
+    # the requirement is that a dead server is reported quickly, and at depth 3 with a
+    # sleeping retry this same scenario took hours.
+    assert calls["n"] < 10, calls["n"]
+
+
+def test_a_split_that_cannot_subdivide_is_what_stops_the_recursion(dvid_server,
+                                                                  monkeypatch):
+    """No failure budget is needed, because this guard always fires first: the leading
+    sub-range of any split is `lo`..`lo + '0'`, which has nothing strictly between its bounds.
+    Verified here on a digit range, where subdivision otherwise looks unbounded."""
+    import neuclease.dvid.keyvalue as ndk
+
+    from em_annotation import dvid as ad
+
+    calls = {"n": 0}
+
+    def dead(server, uuid, instance, lo, hi, **k):
+        calls["n"] += 1
+        raise RuntimeError("504 Server Error: Gateway Time-out")
+
+    monkeypatch.setattr(ndk, "fetch_keyrangevalues", dead)
+    # Passed rather than patched: `boundaries` is a default argument, bound at definition
+    # time, so setting the module constant would not reach it.
+    with pytest.raises(RuntimeError, match="cannot usefully be split further"):
+        ad.fetch_all_body_annotations(_open(KV_URL, "bodies"), boundaries=("1", "2"))
+    assert calls["n"] <= 3, calls["n"]
+
+
+def test_refine_stays_lexicographically_sorted():
+    from em_annotation import dvid as ad
+
+    bounds = ad.refine("1", "2")
+    assert bounds == sorted(bounds)
+    assert bounds[:3] == ["1", "10", "11"] and bounds[-1] == "2"
+    assert len(ad.key_ranges(bounds)) == 11
+
+
+def test_unsorted_boundaries_are_refused():
+    from em_annotation import dvid as ad
+
+    with pytest.raises(ValueError, match="must be sorted"):
+        ad.key_ranges(["5", "1"])
+
+
+def test_cli_all_writes_the_whole_instance(tmp_path, dvid_server, capsys):
+    from em_annotation.cli import main
+
+    out = str(tmp_path / "all")
+    assert main(["bodies", "--src", KV_URL, "--out", out, "--all"]) == 0
+    printed = capsys.readouterr().out
+    assert "records across" in printed
+    assert (tmp_path / "all" / "bodies.parquet").exists()
+
+
+def test_cli_refuses_both_or_neither(tmp_path, dvid_server):
+    from em_annotation.cli import main
+
+    with pytest.raises(SystemExit, match="pass one, not both"):
+        main(["bodies", "--src", KV_URL, "--out", str(tmp_path / "o"),
+              "--all", "--bodies", "1"])
+    with pytest.raises(SystemExit, match="--bodies is required"):
+        main(["bodies", "--src", KV_URL, "--out", str(tmp_path / "o")])
+
+
+# --------------------------------------------------------------------------- #
 # select-bodies
 # --------------------------------------------------------------------------- #
 def _select(tmp_path, dvid_server, url=URL, **kw):

@@ -11,13 +11,23 @@ dist/
 # editor
 .vscode/
 .idea/
+.ipynb_checkpoints/
 
-# Site-specific configs and dataset files live here, untracked. The LEADING SLASH is
-# load-bearing: a bare `configs/` matches at any depth.
+# Site-specific configs. The LEADING SLASH is load-bearing: a bare `configs/` would match
+# at any depth.
 /configs/
 
-# Fetched tables. These are dataset content — a synapse table for 20k bodies is millions
-# of rows — and belong on ceph, not in git. Named by what the commands write.
+# Config override for em_annotation.config, carrying a server address and a branch ref.
+em-annotation.toml
+
+# Rules modules encode one dataset's label vocabulary, not the package's.
+/rules/
+*_rules.py
+
+# Notebooks are working material. Add one deliberately with `git add -f` to release it.
+notebooks/
+
+# Fetched tables are dataset content and belong on bulk storage, not in git.
 *.parquet
 *.feather
 provenance.json

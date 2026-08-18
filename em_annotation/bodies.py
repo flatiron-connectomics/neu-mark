@@ -3,7 +3,7 @@
 Not a convenience: DVID can tell you which elements are in a body, but it cannot cheaply
 tell you which bodies are worth asking about. Both routes that look like they can were
 measured and rejected — the label index is O(all bodies), and a whole-instance
-``labelsz`` threshold query returned nothing in five minutes against dvid.example.org, where
+``labelsz`` threshold query returned nothing in five minutes on our dataset, where
 the great majority of label ids are single-voxel fragments. So the caller supplies the
 set, and it is normally a curated list of traced neurons.
 

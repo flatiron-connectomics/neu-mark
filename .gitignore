@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+*.log
+
+# editor
+.vscode/
+.idea/
+
+# Site-specific configs and dataset files live here, untracked. The LEADING SLASH is
+# load-bearing: a bare `configs/` matches at any depth.
+/configs/
+
+# Fetched tables. These are dataset content — a synapse table for 20k bodies is millions
+# of rows — and belong on ceph, not in git. Named by what the commands write.
+*.parquet
+*.feather
+provenance.json

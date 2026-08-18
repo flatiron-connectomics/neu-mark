@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "em-annotation"
+version = "0.1.0"
+description = "Fetch point and body annotations out of DVID into columnar tables, and publish them as neuroglancer precomputed segment properties and annotation layers."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "Erik Schomburg", email = "eschomburg@flatironinstitute.org" }]
+# In the shared conda env these come from conda-forge, so install with
+# `pip install --no-deps -e .` to keep pip from re-resolving them.
+dependencies = [
+    "numpy>=2",
+    "pandas>=2",           # the table model; annotations are tabular, volumes are not
+    "pyarrow>=15",         # parquet/feather writer. NOT optional: parquet is the default
+                           # output because csv cannot hold a uint64 body id (see io.py)
+    "em-volume-tools",     # location/kvstore writes, DVID node resolution, provenance
+]
+# NOT declared, and cannot be:
+#   neuclease — every DVID read here goes through it. Its own dependencies include
+#     libdvid-cpp, vigra and dvidutils, all conda-only on flyem-forge, so a pip extra
+#     would simply fail to install. Get it with
+#     `mamba install -n em-lib -c flyem-forge -c conda-forge neuclease`.
+# This package imports cleanly without it and raises an explanatory ImportError only
+# when something actually talks to DVID.
+
+[project.scripts]
+# `em-annot`, not `em-annotation`: matches the abbreviated commands its siblings expose
+# (`em-vol`, `em-morpho`) while the library keeps the full name.
+em-annot = "em_annotation.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["em_annotation"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "dvid: needs a reachable DVID server; deselect with -m 'not dvid'",
+]

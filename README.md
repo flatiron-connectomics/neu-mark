@@ -124,6 +124,33 @@ dropping earlier turns "the body list did not cover this partner" into "this syn
 not exist", which at low coverage presents a mostly-incomplete connectome as a complete
 one.
 
+## Inspecting the annotation strings
+
+`instance` is the field that carries the information and it is dirty in bounded ways.
+`em_annotation.explore` is a set of functions for looking at it — DataFrame in, DataFrame
+out, no printing and no I/O, so it is meant for a notebook:
+
+```python
+from em_annotation import explore as ex
+
+ex.instances(bodies)                        # distinct strings -> body counts
+ex.tokens(bodies, drop=r"\((L|R)\)")        # the suffix vocabulary, side removed
+ex.variants(bodies)                         # what normalization repaired ('truncated?')
+ex.near(ex.tokens(bodies), "fragment")      # fuzzy candidates for misspellings
+ex.coverage(bodies, rules)                  # per-rule: fired, coverage, distinct, top
+ex.unparsed(bodies, rules, "cell_type")     # what to fix next, ranked by bodies
+ex.compare(bodies, "type", rule)            # curated field vs a parse, row by row
+```
+
+A **rule** is any callable taking one row (a Series, with missing values as `None`) and
+returning a scalar, a **sequence** for genuinely multi-valued facets — column labels are,
+since some central complex neurons innervate several — or `None` for "did not fire", which
+stays visible rather than becoming an error.
+
+`near` and `variants` catch different things and you want both: whitespace and a trailing
+`?` are repaired by `normalize`, so `truncated?` never appears in the token histogram and
+`near` finds nothing left to fix. `variants` is what shows you the repair happened.
+
 ## Layering
 
 Sits above em-volume-tools (`location` for every write, `dvid` for node resolution,

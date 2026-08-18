@@ -1,0 +1,147 @@
+"""Site defaults for building DVID URLs, from an uncommitted TOML file.
+
+The tension this has to resolve: implicit defaults are *good* for interactive exploration
+and *bad* for anything that produces an artifact. A run whose source depended on a file
+nobody else has is a run nobody can reproduce, and the whole point of the provenance record
+is to say exactly which node an export came from.
+
+So this is a **URL builder, not a fallback**. ``cfg.url("synapses")`` returns a complete
+``dvid://server/uuid/instance`` string that you can print, paste and put in a saved command.
+Nothing consults the config implicitly: the CLI takes a config reference only when it is
+written as ``@name``, and it prints what that resolved to, exactly as it does for a
+``{uuid}`` placeholder in ``--out``. The provenance record stores the resolved URL either
+way, so a config can never make an export less traceable.
+
+Search order (first hit wins):
+
+1. ``$EM_ANNOTATION_CONFIG``
+2. ``./em-annotation.toml`` in the current directory
+3. ``~/.config/em-annotation/config.toml``
+
+```toml
+[dvid]
+server = "dvid.example.org"
+uuid    = "93fdbc:main"      # a branch ref is fine; it is resolved per run
+locked  = true               # prefer the newest locked node
+
+[instances]
+synapses = "synapses"
+bodies   = "labels_annotations"
+labels   = "labels"
+counts   = "synapses_labelsz"
+todo     = "labels_todo"
+```
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, Mapping
+
+#: Where to look, in order. Relative entries are resolved against the cwd.
+SEARCH = ("./em-annotation.toml", "~/.config/em-annotation/config.toml")
+
+#: The environment variable that overrides the search entirely.
+ENV_VAR = "EM_ANNOTATION_CONFIG"
+
+#: Marks a ``--src`` value as a config lookup rather than a URL. Required, so that a saved
+#: command line visibly says "this depended on my config" instead of looking self-contained.
+REFERENCE_PREFIX = "@"
+
+
+class Config:
+    """Resolved site defaults. Immutable; build URLs from it."""
+
+    def __init__(self, data: Mapping[str, Any], path: str | None = None):
+        self._data = dict(data)
+        self.path = path
+        dvid = self._data.get("dvid") or {}
+        self.server = dvid.get("server")
+        self.uuid = dvid.get("uuid")
+        self.locked = bool(dvid.get("locked", False))
+        self.scheme = dvid.get("scheme", "dvid")
+        self.instances = dict(self._data.get("instances") or {})
+
+    def __repr__(self) -> str:                                    # pragma: no cover
+        return (f"Config(path={self.path!r}, server={self.server!r}, "
+                f"uuid={self.uuid!r}, locked={self.locked}, "
+                f"instances={sorted(self.instances)})")
+
+    def url(self, name: str, *, uuid: str | None = None) -> str:
+        """A complete ``dvid://`` URL for a configured instance name.
+
+        ``name`` may be a key under ``[instances]`` or a literal DVID instance name — a
+        literal is allowed so a one-off instance needs no config edit.
+        """
+        if not self.server:
+            raise ValueError(
+                f"{self._where()} sets no dvid.server, so no URL can be built from it.")
+        if not (uuid or self.uuid):
+            raise ValueError(
+                f"{self._where()} sets no dvid.uuid, so no URL can be built from it.")
+        instance = self.instances.get(name, name)
+        return f"{self.scheme}://{self.server}/{uuid or self.uuid}/{instance}"
+
+    def _where(self) -> str:
+        return f"the config at {self.path}" if self.path else "the (empty) default config"
+
+    def resolve(self, value: str) -> str:
+        """Turn ``@name`` into a URL; leave anything else untouched.
+
+        The one entry point the CLI uses, so the ``@`` requirement lives in one place.
+        """
+        if not isinstance(value, str) or not value.startswith(REFERENCE_PREFIX):
+            return value
+        name = value[len(REFERENCE_PREFIX):]
+        if not name:
+            raise ValueError(f"{value!r} names nothing after {REFERENCE_PREFIX!r}")
+        if name not in self.instances and not self.server:
+            raise ValueError(
+                f"--src {value!r} is a config reference, but no config was found. Looked "
+                f"at ${ENV_VAR}, ./em-annotation.toml and "
+                f"~/.config/em-annotation/config.toml.")
+        if name not in self.instances:
+            # Allowed, but say so: a typo would otherwise become a request for a
+            # nonexistent DVID instance and fail much further along.
+            known = ", ".join(sorted(self.instances)) or "(none configured)"
+            raise ValueError(
+                f"--src {value!r}: {name!r} is not in [instances] of {self._where()}. "
+                f"Configured names: {known}. Use a full dvid:// URL for anything else.")
+        return self.url(name)
+
+
+def _read(path: Path) -> dict:
+    import tomllib
+
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
+def find() -> str | None:
+    """The config file that would be used, or ``None``."""
+    explicit = os.environ.get(ENV_VAR)
+    if explicit:
+        # An explicit path that does not exist is an error, not something to fall through:
+        # the caller said which file they meant.
+        if not Path(explicit).expanduser().is_file():
+            raise FileNotFoundError(
+                f"${ENV_VAR} points at {explicit!r}, which is not a file")
+        return str(Path(explicit).expanduser())
+    for candidate in SEARCH:
+        p = Path(candidate).expanduser()
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def load(path: str | None = None) -> Config:
+    """Load the config, or an empty one if there is none.
+
+    Empty rather than an error, so importing this package never depends on a file existing.
+    Asking an empty config for a URL is what raises, and it names where it looked.
+    """
+    chosen = str(Path(path).expanduser()) if path else find()
+    if chosen is None:
+        return Config({}, None)
+    return Config(_read(Path(chosen)), chosen)

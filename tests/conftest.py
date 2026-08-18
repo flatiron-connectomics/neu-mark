@@ -59,3 +59,145 @@ def _tmpfs_root() -> str | None:
 _root = _tmpfs_root()
 if _root is not None:
     os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", _root)
+
+
+# --------------------------------------------------------------------------- #
+# A stubbed DVID, shared by every test that reads one.
+#
+# Stubbed at the `neuclease.dvid.*` boundary rather than at this package's own functions,
+# so the code under test is the code that runs in production — the em-volume-tools lesson
+# that a test building its own spec by hand proves nothing about the path that runs.
+# --------------------------------------------------------------------------- #
+import pandas as pd
+import pytest
+
+from em_annotation import ops
+
+URL = "dvid://dvid.example.org/93fdbc:main/synapses"
+KV_URL = "dvid://dvid.example.org/93fdbc:main/labels_annotations"
+
+SYN_INFO = {"Base": {"TypeName": "annotation", "Syncs": ["labels"]}}
+KV_INFO = {"Base": {"TypeName": "keyvalue", "Syncs": []}}
+LABELSZ_INFO = {"Base": {"TypeName": "labelsz", "Syncs": ["synapses"]}}
+SZ_URL = "dvid://dvid.example.org/93fdbc:main/synapses_labelsz"
+
+#: (pre, post) per body, chosen to cover the two shapes that make a TOTAL threshold the
+#: right default: body 2 is sensory-ish (almost no postsynapses), body 3 projects out of
+#: the traced volume (no presynapses at all). Body 4 is a fragment.
+COUNTS = {1: (5, 100), 2: (60, 3), 3: (0, 40), 4: (2, 3)}
+
+#: Body 1 has a tbar; body 2 has the matching PSD plus one whose partner is unfetched.
+ELEMENTS = {
+    1: [{"Pos": [10, 20, 30], "Kind": "PreSyn", "Prop": {"conf": "0.9", "user": "jwu"},
+         "Rels": [{"Rel": "PreSynTo", "To": [11, 21, 31]},
+                  {"Rel": "PreSynTo", "To": [99, 99, 99]}]}],
+    2: [{"Pos": [11, 21, 31], "Kind": "PostSyn", "Prop": {"conf": "0.5"},
+         "Rels": [{"Rel": "PostSynTo", "To": [10, 20, 30]}]}],
+}
+
+BODY_RECORDS = {
+    "1": {"bodyid": 1, "status": "Traced", "instance": "CAm(L)", "user": "ks"},
+    "2": {"bodyid": 2, "status": "Anchor"},
+}
+
+
+@pytest.fixture(autouse=True)
+def _no_node_cache():
+    from em_volume_tools.dvid import clear_node_cache
+
+    clear_node_cache()
+    yield
+    clear_node_cache()
+
+
+@pytest.fixture()
+def dvid_server(monkeypatch):
+    """A DVID that answers from the dicts above and records what was asked."""
+    pytest.importorskip("neuclease")
+    import neuclease.dvid as nd
+    import neuclease.dvid.annotation as nda
+    import neuclease.dvid.keyvalue as ndk
+
+    import em_volume_tools.dvid as vdvid
+
+    asked = []
+
+    # A lock-and-spawn repo: HEAD (d38898) is open, its parent (846e3a) is locked.
+    # A CONCRETE uuid resolves to itself, as the real endpoint does — without that a
+    # re-resolution of an already-pinned spec silently jumps back to HEAD.
+    def resolve_ref(server, ref, expand=False, **k):
+        if ref.endswith("~1"):
+            return "846e3a"
+        if ref in ("d38898", "846e3a"):
+            return ref
+        return "d38898"
+
+    monkeypatch.setattr(nd, "resolve_ref", resolve_ref)
+    monkeypatch.setattr(nd, "fetch_commit",
+                        lambda server, uuid, **k: uuid == "846e3a")
+
+    def fetch_instance_info(server, uuid, instance, **k):
+        if instance == "synapses":
+            return SYN_INFO
+        if instance.endswith("_labelsz"):
+            return LABELSZ_INFO
+        return KV_INFO
+
+    monkeypatch.setattr(nd, "fetch_instance_info", fetch_instance_info)
+    monkeypatch.setattr(nd, "fetch_repo_info", lambda server, uuid, **k: {
+        "DataInstances": {"synapses": SYN_INFO, "synapses_labelsz": LABELSZ_INFO,
+                          "labels_annotations": KV_INFO}})
+
+    # labelsz: a ranked AllSyn threshold query, paged by offset, plus exact per-type counts.
+    import neuclease.dvid.labelsz as ndsz
+
+    def fetch_threshold(server, uuid, instance, threshold, element_type,
+                        offset=0, n=None, **k):
+        assert element_type == "AllSyn", element_type
+        ranked = sorted(((p + s, b) for b, (p, s) in COUNTS.items()),
+                        key=lambda t: (-t[0], t[1]))
+        hits = [(b, tot) for tot, b in ranked if tot >= threshold]
+        window = hits[offset:offset + (n or 10_000)]
+        return pd.Series({b: tot for b, tot in window},
+                         name="AllSyn", dtype="int64").rename_axis("body")
+
+    def fetch_counts(server, uuid, instance, bodies, element_type, **k):
+        idx = 0 if element_type == "PreSyn" else 1
+        return pd.Series({int(b): COUNTS.get(int(b), (0, 0))[idx] for b in bodies},
+                         name=element_type, dtype="int64").rename_axis("body")
+
+    monkeypatch.setattr(ndsz, "fetch_threshold", fetch_threshold)
+    monkeypatch.setattr(ndsz, "fetch_counts", fetch_counts)
+    monkeypatch.setattr(vdvid, "instance_info",
+                        lambda spec: fetch_instance_info(*vdvid.address(spec)))
+    monkeypatch.setattr(vdvid, "node_provenance",
+                        lambda spec, node: {"source": "dvid", "uuid": node["uuid"],
+                                            "instance": spec["instance"],
+                                            "requested": node.get("ref"),
+                                            "locked": node["locked"]})
+
+    def fetch_label(server, uuid, instance, label, relationships=False, **k):
+        asked.append((label, relationships))
+        return ELEMENTS.get(int(label), [])
+
+    monkeypatch.setattr(nda, "fetch_label", fetch_label)
+
+    def fetch_keyvalues(server, uuid, instance, keys, **k):
+        return {key: BODY_RECORDS.get(key) for key in keys}
+
+    monkeypatch.setattr(ndk, "fetch_keyvalues", fetch_keyvalues)
+    return asked
+
+
+def _src(url=URL):
+    from em_volume_tools.dvid import parse_url
+
+    return {"backend": "dvid", **parse_url(url)}
+
+
+def _open(url=URL, kind="points", *, locked=False):
+    """The resolved source, as the CLI produces it before doing anything else."""
+    opener = ops.open_points_source if kind == "points" else ops.open_bodies_source
+    return opener(_src(url), prefer_locked=locked)
+
+

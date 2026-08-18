@@ -24,6 +24,8 @@ DVID source, as dvid://SERVER/UUID/INSTANCE — always three segments:
             (93fdbc:main), which means "HEAD of that branch".
   INSTANCE  the data instance name.
 A ':' in the server (port) or the uuid (branch) adds no segment; this splits on '/'.
+Or '@name' to look the instance up in your config (em_annotation.config); the
+resolved URL is printed, so the command still says what it read.
 """
 
 
@@ -149,12 +151,27 @@ def _parse_args(argv=None):
 
 
 def _src_spec(src: str) -> dict[str, Any]:
+    """Resolve ``--src`` to a spec, expanding an ``@name`` config reference.
+
+    A reference is **printed** when it resolves, for the same reason a ``{uuid}``
+    placeholder in ``--out`` is: a command whose meaning depends on an uncommitted file
+    should say what that file turned it into. The provenance record stores the resolved URL
+    regardless, so a config cannot make an export less traceable.
+    """
     from em_volume_tools.dvid import is_url, parse_url
+
+    from . import config as _config
+
+    if isinstance(src, str) and src.startswith(_config.REFERENCE_PREFIX):
+        resolved = _config.load().resolve(src)
+        print(f"--src {src}  ->  {resolved}")
+        src = resolved
 
     if not is_url(src):
         raise SystemExit(
             f"--src {src!r} is not a DVID URL. This command reads annotations from DVID, "
-            f"which is addressed as dvid://server/uuid/instance.")
+            f"which is addressed as dvid://server/uuid/instance. A leading "
+            f"{_config.REFERENCE_PREFIX!r} looks the name up in your config instead.")
     return {"backend": "dvid", **parse_url(src)}
 
 

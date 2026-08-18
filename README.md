@@ -124,6 +124,95 @@ dropping earlier turns "the body list did not cover this partner" into "this syn
 not exist", which at low coverage presents a mostly-incomplete connectome as a complete
 one.
 
+## In a notebook
+
+The same fetches, returning DataFrames and writing nothing:
+
+```python
+from em_annotation import source, select_bodies, points, body_annotations
+
+src = source("@synapses", locked=True)        # node pinned once
+sel = select_bodies("@counts", min_synapses=10, locked=True)   # body, pre, post, syn
+pts, rels = points(src, sel.head(50))          # bodies: frame, Series, list or a path
+ann = body_annotations("@bodies", sel.head(50), locked=True)
+```
+
+`em_annotation.ops` is the other half — same fetches, but writing tables and a provenance
+record to a destination. Both go through the same functions, so what you see in a notebook
+is what a run would write.
+
+### Site defaults (optional)
+
+An uncommitted TOML file supplies the server, uuid and instance names, so `@synapses` stands
+in for a full URL. It is a **URL builder, not a fallback**: nothing consults it implicitly,
+`@name` is required so a saved command visibly depends on it, and both the CLI and the
+library print what a reference resolved to.
+
+```toml
+# ./em-annotation.toml, or ~/.config/em-annotation/config.toml, or $EM_ANNOTATION_CONFIG
+[dvid]
+server = "dvid.example.org"
+uuid   = "93fdbc:main"
+locked = true
+
+[instances]
+synapses = "synapses"
+bodies   = "labels_annotations"
+counts   = "synapses_labelsz"
+```
+
+```console
+$ em-annot select-bodies --src @counts --min-synapses 400 --out 'sel/{uuid:8}' --dvid-locked
+--src @counts  ->  dvid://dvid.example.org/93fdbc:main/synapses_labelsz
+--out sel/{uuid:8}  ->  sel/821d68d2
+```
+
+## Writing rules
+
+A rules module is dataset content, loaded by path, not part of this package:
+
+```python
+# wasp_rules.py
+import re
+from em_annotation import rule
+
+KEEP = ["instance", "type"]          # explicit; nothing else reaches a viewer
+
+@rule
+def side(r):
+    """Hemisphere, from the parenthesized (L)/(R)."""
+    m = re.search(r"\((L|R)\)", str(r["instance"] or ""))
+    return m.group(1) if m else None
+
+@rule(multi=True)
+def column(r):
+    """Column labels; genuinely multi-valued."""
+    return re.findall(r"_([A-Z]\d+)(?=$|[_(])", str(r["instance"] or ""))
+```
+
+A rule takes one row and returns a scalar, a **sequence** (for multi-valued facets), or
+`None` for "did not fire". `needs` declares the columns it reads, so a missing one is an
+error naming the rule rather than an `AttributeError` mid-apply. `multi=False` (the default)
+is checked: a rule that returns two values raises, which catches `re.findall` where
+`re.search` was meant.
+
+Testing one rule, or all of them, on one string:
+
+```python
+from em_annotation import rules
+RS = rules.from_module("wasp_rules.py")
+
+RS["side"].test("Tm2_A2(L)")        # 'L'
+RS["side"].test("AGNG")             # None
+RS.explain("LN_C5(L)_NCL")          # {'side': 'L', 'column': ('C5',), ...}
+
+RS.coverage(bodies)                 # per rule: fired, coverage, distinct, multi, top
+RS.unparsed(bodies, "column")       # what to fix next, ranked by bodies
+```
+
+`test` and `explain` build a synthetic row through the real path, so missing fields arrive as
+`None` rather than `pd.NA` — the difference that makes `r["instance"] or ""` work.
+
 ## Inspecting the annotation strings
 
 `instance` is the field that carries the information and it is dirty in bounded ways.

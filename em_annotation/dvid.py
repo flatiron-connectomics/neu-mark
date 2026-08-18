@@ -59,9 +59,10 @@ DEFAULT_THREADS = 8
 #: DVID instance types this module can read, by what they hold.
 POINT_INSTANCE = "annotation"
 BODY_INSTANCE = "keyvalue"
+COUNT_INSTANCE = "labelsz"
 
 
-def open_source(spec: Mapping[str, Any], *, expect: str,
+def open_source(spec: Mapping[str, Any], *, expect: str | tuple[str, ...],
                 prefer_locked: bool = False) -> dict[str, Any]:
     """Resolve the ref, check the instance type, and return the pinned spec.
 
@@ -75,7 +76,8 @@ def open_source(spec: Mapping[str, Any], *, expect: str,
               "requested_ref": spec.get("requested_ref", node["ref"]),
               "ancestors_walked": node.get("walked", 0)}
     info = _vdvid.instance_info(pinned)
-    _vdvid.check_instance_type(info, pinned, expect)
+    expected = (expect,) if isinstance(expect, str) else tuple(expect)
+    _vdvid.check_instance_type(info, pinned, *expected)
     if not node["locked"]:
         logger.warning(
             "%s is an OPEN node, so it is still being written to and this pull is not "
@@ -178,6 +180,133 @@ def fetch_body_annotations(source: Mapping[str, Any], bodies: Sequence[int], *,
     frame = tables.keyvalues_to_frame(values)
     return {"bodies": frame, "requested": len(keys), "found": int(len(frame)),
             "missing": [int(k) for k in keys if int(k) not in set(frame["body"].tolist())]}
+
+
+# --------------------------------------------------------------------------- #
+# choosing which bodies to fetch, from DVID's own ranked synapse index
+# --------------------------------------------------------------------------- #
+#: DVID's page size for a `labelsz` threshold query. Not ours to choose — the endpoint
+#: caps a response at 10,000 and pages by rank via `offset`.
+_LABELSZ_PAGE = 10_000
+
+#: A bound on how deep to page. Each page costs MORE than the last (DVID appears to
+#: re-rank per request: measured 4.8 s at offset 0 against 11.5 s at offset 50,000), so an
+#: unbounded walk down a low threshold is what makes this look like a hang rather than a
+#: slow query. neuclease's own `fetch_threshold` defaults `n` to 1e12, i.e. exactly that.
+_MAX_SELECT = 500_000
+
+
+def resolve_labelsz(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Point a source at the ``labelsz`` instance to query, from whatever was given.
+
+    Accepts either the ``labelsz`` instance itself or the ``annotation`` instance it
+    indexes — the latter because that is the name people know (`synapses`), and the index's
+    own ``Base.Syncs`` records which annotation instance it belongs to, so the mapping is
+    discoverable rather than something to memorise.
+    """
+    info = source.get("instance_info") or _vdvid.instance_info(source)
+    kind = _vdvid.instance_type(info)
+    if kind == COUNT_INSTANCE:
+        return {**dict(source), "indexes": _vdvid.synced_instances(info) or None}
+
+    # An annotation instance: find the labelsz that syncs to it.
+    try:
+        from neuclease.dvid import fetch_repo_info
+    except ImportError as exc:
+        raise ImportError(MISSING) from exc
+
+    server, uuid, instance = _vdvid.address(source)
+    repo = fetch_repo_info(server, uuid)
+    matches = [name for name, d in (repo.get("DataInstances") or {}).items()
+               if d.get("Base", {}).get("TypeName") == COUNT_INSTANCE
+               and instance in (d.get("Base", {}).get("Syncs") or [])]
+    if not matches:
+        raise ValueError(
+            f"no 'labelsz' instance on this node indexes {instance!r}, so DVID has no "
+            f"per-body synapse counts to rank by. Point --src at a labelsz instance "
+            f"directly, or have one created and synced to {instance!r} in DVID.")
+    if len(matches) > 1:
+        raise ValueError(
+            f"several labelsz instances index {instance!r} ({', '.join(sorted(matches))}); "
+            f"name the one you want in --src.")
+    logger.info("using labelsz instance %r (it indexes %r)", matches[0], instance)
+    return {**dict(source), "instance": matches[0], "indexes": [instance]}
+
+
+def fetch_synapse_counts(source: Mapping[str, Any], *, min_total: int = 10,
+                         min_pre: int = 0, min_post: int = 0,
+                         limit: int | None = None):
+    """Bodies with at least this many synapses, with their pre/post counts.
+
+    Driven by one ranked ``threshold`` query on ``AllSyn``, then refined with exact
+    per-element-type counts. The threshold used is ``max`` of the three minimums, which is
+    sound because ``AllSyn`` is the catch-all and is therefore ``>=`` each individual type —
+    verified against real bodies rather than assumed.
+
+    Returns a DataFrame indexed 0..n with ``body``, ``pre``, ``post``, ``syn``, ranked by
+    ``syn`` descending.
+    """
+    import pandas as pd
+
+    from neuclease.dvid import labelsz
+
+    server, uuid, instance = _vdvid.address(source)
+    threshold = max(int(min_total), int(min_pre), int(min_post), 1)
+
+    # Page explicitly rather than letting neuclease default n to 1e12: per-page cost grows
+    # with offset, so an accidental deep walk is the difference between 20 s and minutes.
+    pages, offset = [], 0
+    while offset < _MAX_SELECT:
+        want = min(_LABELSZ_PAGE, _MAX_SELECT - offset)
+        page = with_retry(
+            lambda o=offset, w=want: labelsz.fetch_threshold(
+                server, uuid, instance, threshold, "AllSyn", offset=o, n=w),
+            label=f"labelsz AllSyn>={threshold} offset={offset}")
+        if page is None or not len(page):
+            break
+        pages.append(page)
+        offset += len(page)
+        if len(page) < want:
+            break
+        logger.info("selected %d bodies so far (AllSyn >= %d)", offset, threshold)
+    else:
+        logger.warning(
+            "stopped at the %d-body cap with more bodies still above the threshold. "
+            "Raise --min-synapses, or --limit what you need: paging deeper costs more per "
+            "page than the last.", _MAX_SELECT)
+
+    if not pages:
+        # An empty result is the documented failure mode of asking a labelsz instance for
+        # an element type it does not index, so say what was actually asked.
+        raise ValueError(
+            f"no bodies have AllSyn >= {threshold} in {_vdvid.spec_url(source)}. If that "
+            f"is surprising, check that this labelsz instance is synced to an annotation "
+            f"instance — DVID answers an unindexed element type with an EMPTY result "
+            f"rather than an error.")
+
+    syn = pd.concat(pages)
+    bodies = [int(b) for b in syn.index]
+    pre = with_retry(
+        lambda: labelsz.fetch_counts(server, uuid, instance, bodies, "PreSyn"),
+        label="labelsz PreSyn counts")
+    post = with_retry(
+        lambda: labelsz.fetch_counts(server, uuid, instance, bodies, "PostSyn"),
+        label="labelsz PostSyn counts")
+
+    df = pd.DataFrame({"syn": syn.astype("int64")})
+    df["pre"] = pre.reindex(df.index).fillna(0).astype("int64")
+    df["post"] = post.reindex(df.index).fillna(0).astype("int64")
+    if min_pre:
+        df = df[df["pre"] >= int(min_pre)]
+    if min_post:
+        df = df[df["post"] >= int(min_post)]
+    df = df.sort_values(["syn", "pre"], ascending=False)
+    if limit is not None:
+        df = df.head(int(limit))
+    out = df.reset_index()
+    out = out.rename(columns={out.columns[0]: "body"})
+    out["body"] = out["body"].astype(tables.BODY_DTYPE)
+    return out[["body", "pre", "post", "syn"]]
 
 
 def node_record(source: Mapping[str, Any], **extra: Any) -> dict[str, Any]:

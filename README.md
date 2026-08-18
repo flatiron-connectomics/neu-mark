@@ -26,15 +26,40 @@ pip install --no-deps -e ./em-annotation
 
 ## Usage
 
-Every command takes an explicit `--bodies` list. This is not an optimization: the dataset
-has a huge number of label ids, the great majority of them fragments nobody cares about,
-and DVID has no cheap way to enumerate the interesting ones. Both routes that look like
-they can (the label index, a whole-instance `labelsz` threshold query) are O(all bodies)
-and were measured as unusable here.
+Every fetch takes an explicit `--bodies` list, because the dataset has ~80M label ids and
+the great majority are single-voxel fragments nobody cares about. `select-bodies` is how
+you build that list.
+
+### Choosing the bodies
+
+`select-bodies` ranks by **synapse count**, using the `labelsz` index DVID already
+maintains — `AllSyn >= 10` returns 21,116 bodies in ~20 s on dvid.example.org. Point `--src` at
+either the `labelsz` instance or the annotation instance it indexes (`synapses`), and its
+`Base.Syncs` is used to find the index.
+
+Synapse count rather than voxel size, for three reasons: a body with no synapses is a
+fragment; many of the largest-by-volume bodies are glia; and scanning every label's size is
+~70 minutes (~80M labels at ~19k/s via `fetch_listlabels`, which pages serially by
+`start = last_id + 1`).
+
+**The threshold is on the total, not on pre and post separately.** That is a domain
+constraint, not a simplification — sensory neurons may have no postsynapses, and a neuron
+projecting outside the traced volume may have no presynapses, so requiring both drops
+exactly the cells most worth looking at. `--min-pre` / `--min-post` exist when you do want
+that; both default to off.
+
+Rank from a **locked** node. Body ids change with proofreading, so the list and the
+annotations should come from the same node — which is also why `select-bodies` writes a
+provenance record naming it, rather than a bare list of ids.
 
 ```bash
 # what am I pointing at, and which node would I get?
 em-annot info --src dvid://dvid.example.org/93fdbc:main/synapses
+
+# build the body list itself, from DVID's ranked synapse index (~20 s)
+em-annot select-bodies \
+    --src dvid://dvid.example.org/93fdbc:main/synapses \
+    --min-synapses 10 --out 'bodies_{uuid:8}/' --dvid-locked
 
 # synapses for a body list -> points.parquet + relationships.parquet
 em-annot points \
@@ -58,6 +83,7 @@ tomorrow.
 
 | table | grain | key columns |
 | --- | --- | --- |
+| `selected_bodies` | one row per selected body | `body`, `pre`, `post`, `syn` |
 | `points` | one row per element | `body`, `z`, `y`, `x`, `kind`, `conf`, `user`, … |
 | `relationships` | one row per relationship | `rel`, `z/y/x`, `to_z/to_y/to_x`, `from_body`, `to_body` |
 | `connections` (`--connections`) | one row per distinct (tbar, psd) pair | `pre_*`, `post_*`, `pre_body`, `post_body` |

@@ -92,6 +92,48 @@ def build_parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_bodies)
 
     q = sub.add_parser(
+        "select-bodies",
+        help="choose which bodies are worth fetching, by synapse count",
+        description="Rank bodies by synapse count using DVID's own `labelsz` index and "
+                    "write the list, for feeding to --bodies. Seconds, against ~70 "
+                    "minutes to scan every label's voxel size — and synapse count is the "
+                    "better criterion anyway: a body with no synapses is a fragment, and "
+                    "many of the largest-by-volume bodies are glia.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    q.add_argument("--src", required=True, metavar="URL",
+                   help=_SRC_HELP + "For this command INSTANCE is a labelsz instance "
+                        "(e.g. 'synapses_labelsz') or the annotation instance it indexes "
+                        "(e.g. 'synapses'), in which case its labelsz is found via Syncs.")
+    q.add_argument("--out", required=True, metavar="DST",
+                   help="destination directory for the list; writes selected_bodies.<fmt> "
+                        "plus a provenance record naming the node it came from. Accepts "
+                        "the same {uuid}/{branch}/{instance} placeholders.")
+    q.add_argument("--min-synapses", type=int, default=10, metavar="N",
+                   help="keep bodies with at least this many synapses in TOTAL "
+                        "(default 10). Total rather than per-type on purpose: sensory "
+                        "neurons may have no postsynapses, and a neuron leaving the "
+                        "traced volume may have no presynapses.")
+    q.add_argument("--min-pre", type=int, default=0, metavar="N",
+                   help="additionally require at least N presynapses. Off by default — it "
+                        "excludes neurons that only receive within the traced volume.")
+    q.add_argument("--min-post", type=int, default=0, metavar="N",
+                   help="additionally require at least N postsynapses. Off by default — it "
+                        "excludes sensory neurons.")
+    q.add_argument("--limit", type=int, default=None, metavar="N",
+                   help="keep only the top N after filtering. Results are ranked by total "
+                        "synapses, so this is how to ask for 'the biggest N'.")
+    q.add_argument("--format", dest="fmt", default="csv",
+                   choices=("csv", "parquet", "feather"),
+                   help="list format (default: csv — a body list is meant to be read and "
+                        "edited by hand, and every column here is a non-nullable integer, "
+                        "which csv does preserve).")
+    q.add_argument("--dvid-locked", action="store_true",
+                   help="rank from the newest LOCKED ancestor. Worth doing: body ids "
+                        "change with proofreading, so the list and the annotations should "
+                        "come from the same node.")
+    q.set_defaults(func=cmd_select_bodies)
+
+    q = sub.add_parser(
         "info", help="what a DVID annotation source is, and which node you would get",
         description="One request per fact: the instance type, what it is synced to, and "
                     "both candidate nodes for the ref (what it points at now, and the "
@@ -194,6 +236,28 @@ def cmd_bodies(args) -> int:
         print(f"  {len(result['missing'])} had none (not an error — DVID simply has no "
               f"annotation for them)")
     print(f"wrote {', '.join(result['written'])} to {out}")
+    return 0
+
+
+def cmd_select_bodies(args) -> int:
+    from . import ops
+
+    source = ops.open_counts_source(_src_spec(args.src),
+                                    prefer_locked=bool(args.dvid_locked))
+    out = _expand_out(args.out, source)
+    result = ops.select_bodies(source, out, min_synapses=args.min_synapses,
+                               min_pre=args.min_pre, min_post=args.min_post,
+                               limit=args.limit, fmt=args.fmt)
+    df = result["bodies"]
+    print(f"selected {len(df)} bodies (>= {args.min_synapses} synapses"
+          + (f", >= {args.min_pre} pre" if args.min_pre else "")
+          + (f", >= {args.min_post} post" if args.min_post else "") + ")")
+    if len(df):
+        print(f"  synapses per body: {int(df['syn'].min())}..{int(df['syn'].max())}, "
+              f"{int(df['syn'].sum())} total")
+    listed = f"{out.rstrip('/')}/{result['written'][0]}"
+    print(f"wrote {result['written'][0]} to {out}")
+    print(f"  feed it onward with:  --bodies {listed}")
     return 0
 
 

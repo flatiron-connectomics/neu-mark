@@ -48,6 +48,52 @@ def open_bodies_source(src: Mapping[str, Any], *,
                              prefer_locked=prefer_locked)
 
 
+def open_counts_source(src: Mapping[str, Any], *,
+                       prefer_locked: bool = False) -> dict[str, Any]:
+    """Resolve a synapse-count source: a ``labelsz`` index, or the instance it indexes."""
+    source = _dvid.open_source(
+        src, expect=(_dvid.COUNT_INSTANCE, _dvid.POINT_INSTANCE),
+        prefer_locked=prefer_locked)
+    return _dvid.resolve_labelsz(source)
+
+
+#: Written by `select_bodies`. A single file, and the name is stable so the next command
+#: can be pointed at `<out>/selected_bodies.csv` without thinking.
+SELECTED_TABLE = "selected_bodies"
+
+
+def select_bodies(source: Mapping[str, Any], dst: str, *, min_synapses: int = 10,
+                  min_pre: int = 0, min_post: int = 0, limit: int | None = None,
+                  fmt: str = "csv") -> dict[str, Any]:
+    """Choose which bodies are worth fetching annotations for, and write the list.
+
+    Uses DVID's own ranked ``labelsz`` index, which costs seconds — against ~70 minutes to
+    scan all ~80M label sizes, and unlike a size ranking it selects on what actually makes a
+    body interesting in a connectome. A body with no synapses is a fragment.
+
+    **The default threshold is on the TOTAL**, not on pre and post separately, and that is a
+    domain constraint rather than a simplification: sensory neurons may have no postsynapses
+    at all, and a neuron projecting outside the traced volume may have no presynapses.
+    Requiring both would silently drop exactly the cells most worth looking at.
+    ``min_pre`` / ``min_post`` exist for when that is what you want.
+
+    Output goes to a directory so the list carries a provenance record naming the node it
+    was computed from — a body list whose node nobody can identify is the thing that goes
+    quietly stale, since proofreading changes body ids.
+    """
+    df = _dvid.fetch_synapse_counts(source, min_total=min_synapses, min_pre=min_pre,
+                                    min_post=min_post, limit=limit)
+    run = {"min_synapses": min_synapses, "min_pre": min_pre or None,
+           "min_post": min_post or None, "limit": limit,
+           "bodies_selected": int(len(df)),
+           "indexes": source.get("indexes"),
+           "synapses_total": int(df["syn"].sum()) if len(df) else 0}
+    record = _record(source, dst, run=run)
+    written = [_io.write_table(df, dst, SELECTED_TABLE, fmt=fmt, metadata=record)]
+    _io.write_provenance(dst, record)
+    return {"bodies": df, "written": written, "record": record}
+
+
 def _record(source: Mapping[str, Any], dst: str, *, run: Mapping[str, Any]) -> dict:
     from em_volume_tools.ops.provenance import build_record
 

@@ -105,7 +105,8 @@ def _record(source: Mapping[str, Any], dst: str, *, run: Mapping[str, Any]) -> d
 
 def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
                  threads: int = _dvid.DEFAULT_THREADS, fmt: str = "parquet",
-                 drop_unmatched: bool = False,
+                 drop_unmatched: bool = False, rois: Sequence[str] | None = None,
+                 on_roi_overlap: str = "warn",
                  write_connections: bool = False) -> dict[str, Any]:
     """Point annotations for ``bodies`` -> ``points`` + ``relationships`` tables.
 
@@ -125,6 +126,18 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
     result = _dvid.fetch_points(source, bodies, threads=threads)
     points, rels, match = result["points"], result["relationships"], result["match"]
 
+    roi_stats = None
+    if rois:
+        # Only the points table gets a `roi`. A relationship spans two points that may sit
+        # in different neuropils, so a single column on it would have to pick one; the join
+        # back to `points` answers either side exactly.
+        labelled = _dvid.label_point_rois(source, points, rois,
+                                          on_overlap=on_roi_overlap)
+        points = labelled["points"]
+        roi_stats = {k: labelled.get(k) for k in
+                     ("rois", "labeled", "unlabeled", "overlapping", "ambiguous",
+                      "ambiguous_pairs", "counts")}
+
     if drop_unmatched:
         before = len(rels)
         rels = rels[rels["to_body"].notna()].reset_index(drop=True)
@@ -135,6 +148,7 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
            "elements": int(len(points)), "relationships": int(len(rels)),
            "match": match, "synced_to": synced,
            "drop_unmatched": drop_unmatched or None,
+           "rois": roi_stats,
            "failures": result["failures"] or None}
     record = _record(source, dst, run=run)
 
@@ -145,7 +159,8 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
                                        fmt=fmt, metadata=record))
     _io.write_provenance(dst, record)
 
-    return {**result, "relationships": rels, "written": written, "record": record}
+    return {**result, "points": points, "relationships": rels, "rois": roi_stats,
+            "written": written, "record": record}
 
 
 def fetch_bodies(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,

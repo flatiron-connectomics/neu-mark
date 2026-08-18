@@ -272,6 +272,25 @@ def match_rate(conns: pd.DataFrame) -> dict[str, Any]:
             "fraction": both / total}
 
 
+def body_roi_counts(points: pd.DataFrame, *, kind_column: str = "kind") -> pd.DataFrame:
+    """Per body and kind, how many synapses fall in each ROI. Long form, lossless.
+
+    Not written as a table by any command — it is a group-by over ``points`` and would go
+    stale beside it. Provided because it is the shape a tagging rule wants: "where are this
+    body's presynapses" is ``pivot`` away, and where a neuron's *output* sits is often what
+    identifies it.
+    """
+    if "roi" not in points.columns:
+        raise KeyError(
+            "no 'roi' column: fetch the points with a ROI set (em-annot points --rois, or "
+            "notebook.points(..., rois=[...])) to label each synapse with its neuropil.")
+    have = [c for c in ("body", kind_column, "roi") if c in points.columns]
+    counts = (points[have].dropna(subset=["roi"])
+              .value_counts(dropna=True).rename("synapses").reset_index())
+    return counts.sort_values(["body", "synapses"], ascending=[True, False],
+                              ignore_index=True)
+
+
 def keyvalues_to_frame(values: Mapping[str, Any]) -> pd.DataFrame:
     """``{body_key: json}`` from a keyvalue instance -> one row per body.
 

@@ -82,6 +82,20 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--connections", action="store_true",
                    help="also write a `connections` table: the oriented, de-duplicated "
                         "(tbar, psd) pairs derived from `relationships`.")
+    q.add_argument("--rois", metavar="LIST", default=None,
+                   help="label each synapse with the neuropil it falls in, adding a `roi` "
+                        "column to the points table. A comma-separated list of DVID roi "
+                        "instance names, a path to a file with one per line, or '@name' for "
+                        "a set from your config. There is deliberately NO default: the "
+                        "combined ROI volume is built by overwriting, so 'all of them' "
+                        "would attribute a point to whichever containing ROI came last.")
+    q.add_argument("--strict-rois", action="store_true",
+                   help="refuse if the chosen ROIs overlap. By default overlap is allowed "
+                        "and MEASURED: the later ROI wins, and the report says how many of "
+                        "your synapses sit in an intersection and are therefore attributed "
+                        "by ROI order alone. Use this if you need a strict partition — the "
+                        "dataset has subtracted variants (INP(-ATL)(L), PENP(-AMMC)) "
+                        "for that.")
     q.set_defaults(func=cmd_points)
 
     q = sub.add_parser(
@@ -200,6 +214,47 @@ def _load_bodies(args) -> list[int]:
     return ids
 
 
+def _roi_list(value: str | None) -> list[str] | None:
+    """``--rois`` as a name list: a comma list, a file of names, or an ``@name`` config set."""
+    import os
+
+    if not value:
+        return None
+    from . import notebook as _nb
+
+    if not value.startswith("@") and os.path.exists(value):
+        with open(value) as fh:
+            return [line.split("#", 1)[0].strip() for line in fh
+                    if line.split("#", 1)[0].strip()]
+    resolved = _nb.roi_set(value)
+    if value.startswith("@"):
+        print(f"--rois {value}  ->  {len(resolved)} ROIs")
+    return resolved
+
+
+def _report_rois(stats: dict | None) -> None:
+    """How many synapses landed in a neuropil. A large unlabelled share means the wrong set."""
+    if not stats:
+        return
+    total = stats["labeled"] + stats["unlabeled"]
+    if not total:
+        return
+    print(f"rois: {stats['labeled']} of {total} synapses inside one of "
+          f"{len(stats['rois'])} ROIs ({stats['labeled'] / total:.1%}), "
+          f"{stats['unlabeled']} outside every one")
+    top = sorted(stats["counts"].items(), key=lambda kv: -kv[1])[:5]
+    if top:
+        print("  " + ", ".join(f"{name} ({n})" for name, n in top))
+    if stats.get("overlapping"):
+        n = stats.get("ambiguous") or 0
+        print(f"  {len(stats['overlapping'])} ROI pairs intersect; {n} synapse(s) "
+              f"({n / total:.2%}) sit in an intersection and are attributed by ROI ORDER "
+              f"alone" + (f" — {stats.get('ambiguous_pairs')}" if n else ""))
+    if stats["unlabeled"] > stats["labeled"]:
+        print("  NOTE: most synapses fell outside every ROI given. That is a statement "
+              "about the ROI set, not the data — check it covers the traced volume.")
+
+
 def _report_match(match: dict) -> None:
     """The headline number. A low fraction means the body list is too small."""
     if not match.get("pairs"):
@@ -228,9 +283,12 @@ def cmd_points(args) -> int:
     kwargs = {} if args.threads is None else {"threads": args.threads}
     result = ops.fetch_points(source, out, ids, fmt=args.fmt,
                               drop_unmatched=bool(args.drop_unmatched),
+                              rois=_roi_list(args.rois),
+                              on_roi_overlap="error" if args.strict_rois else "warn",
                               write_connections=bool(args.connections), **kwargs)
     print(f"points: {len(result['points'])} elements, "
           f"{len(result['relationships'])} relationships")
+    _report_rois(result.get("rois"))
     _report_match(result["match"])
     if result["failures"]:
         print(f"  {len(result['failures'])} bodies failed and were skipped; "

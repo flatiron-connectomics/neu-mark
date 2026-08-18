@@ -30,6 +30,11 @@ bodies   = "labels_annotations"
 labels   = "labels"
 counts   = "synapses_labelsz"
 todo     = "labels_todo"
+
+# Named ROI lists, for `--rois @neuropils`. The set must be a chosen, non-overlapping
+# partition — see `dvid.label_point_rois` for why there is no "all".
+[roi_sets]
+neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AL(L)", "LH(L)", "LH(R)"]
 ```
 """
 
@@ -62,6 +67,18 @@ class Config:
         self.locked = bool(dvid.get("locked", False))
         self.scheme = dvid.get("scheme", "dvid")
         self.instances = dict(self._data.get("instances") or {})
+        #: Named ROI lists. The set has to be chosen (a non-overlapping partition), and it is
+        #: long, so naming one is the difference between a usable command and a paragraph.
+        self.roi_sets = {k: list(v) for k, v in
+                         (self._data.get("roi_sets") or {}).items()}
+
+    def roi_set(self, name: str) -> list[str]:
+        """A named ROI list from ``[roi_sets]``."""
+        if name not in self.roi_sets:
+            known = ", ".join(sorted(self.roi_sets)) or "(none configured)"
+            raise ValueError(
+                f"no ROI set named {name!r} in {self._where()}. Configured sets: {known}.")
+        return list(self.roi_sets[name])
 
     def __repr__(self) -> str:                                    # pragma: no cover
         return (f"Config(path={self.path!r}, server={self.server!r}, "

@@ -84,7 +84,7 @@ tomorrow.
 | table | grain | key columns |
 | --- | --- | --- |
 | `selected_bodies` | one row per selected body | `body`, `pre`, `post`, `syn` |
-| `points` | one row per element | `body`, `z`, `y`, `x`, `kind`, `conf`, `user`, … |
+| `points` | one row per element | `body`, `z`, `y`, `x`, `kind`, `conf`, `user`, `roi` |
 | `relationships` | one row per relationship | `rel`, `z/y/x`, `to_z/to_y/to_x`, `from_body`, `to_body` |
 | `connections` (`--connections`) | one row per distinct (tbar, psd) pair | `pre_*`, `post_*`, `pre_body`, `post_body` |
 | `bodies` | one row per body | `body`, `status`, `instance` (= neuron name), `user`, `json` |
@@ -102,6 +102,43 @@ which silently rounds ids above 2^53. A *non*-nullable `uint64` column does surv
 intact, which makes this the worse failure mode — the corruption is confined to the one
 column nobody thinks to check. `--format csv` is available and warns, naming the columns
 that will not survive.
+
+### Which neuropil each synapse is in
+
+`--rois` (or `points(..., rois=[...])`) adds a `roi` column to the points table, via
+`neuclease`'s `determine_point_rois`. It samples a combined ROI volume at scale 5, so it is
+cheap, and it takes `x`/`y`/`z` **columns** — which our tables have by name, so there is no
+flip and no chance of one.
+
+```bash
+em-annot points --src @synapses --bodies traced.csv --out syn/ \
+    --rois 'ME(L),ME(R),LO(L),LO(R),AGNG,PGNG,SNP(L),SNP(R)'     # or --rois @neuropils
+```
+
+Only the **points** table gets it. A relationship spans two points that may be in different
+neuropils, so one column on it would have to pick a side; a join back to `points` answers
+either. `tables.body_roi_counts(points)` aggregates per body and kind.
+
+**The ROI set is required — there is no "all".** The combined volume is built by writing each
+ROI in turn, so passing every ROI on the node would attribute a point in `ME(L)` to whichever
+of `ME(L)` / `OL(L)` / `all_neuropils` was written last. A name that is not an ROI instance
+on the node is caught before any fetch, with close matches suggested.
+
+Where ROIs do intersect the later one wins, and there is no principled tie-break — so this
+**proceeds and measures it**, in the unit that decides whether to care: the volume is
+unpacked a second time with the order reversed (the ROI *fetch* is not repeated, so this is
+nearly free) and the two labellings compared. The report says how many of *your* synapses
+change hands:
+
+```
+rois: 989 of 1919 synapses inside one of 3 ROIs (51.5%), 930 outside every one
+  OL(L) (919), AGNG (70)
+  1 ROI pairs intersect; 919 synapse(s) (47.89%) sit in an intersection and are
+  attributed by ROI ORDER alone — {'OL(L) | ME(L)': 919}
+```
+
+`--strict-rois` refuses instead, for a strict partition; the dataset has deliberately
+subtracted variants (`INP(-ATL)(L)`, `PENP(-AMMC)`, `VLNP(-AOTU)(L)`) for that.
 
 ### The partner-resolution caveat
 

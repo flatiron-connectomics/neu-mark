@@ -123,19 +123,45 @@ def select_bodies(location="counts", *, min_synapses: int = 10, min_pre: int = 0
 
 
 def points(location, bodies, *, threads: int = _dvid.DEFAULT_THREADS,
-           locked: bool = False, config=None, connections: bool = False):
+           locked: bool = False, config=None, connections: bool = False,
+           rois: Sequence[str] | str | None = None,
+           on_roi_overlap: str = "warn"):
     """Point annotations for ``bodies``. Returns ``(points, relationships)``.
 
     With ``connections=True`` returns ``(points, relationships, connections)`` — the
     oriented, de-duplicated ``(tbar, psd)`` pairs. The match rate is not printed here; take
     it with ``em_annotation.tables.match_rate(connections)``, and remember it is a statement
     about how much of the connectome ``bodies`` covers.
+
+    ``rois`` adds a ``roi`` column to the points frame: which neuropil each synapse is in.
+    A list of instance names, or ``"@name"`` for a set from the config. Only the points
+    frame gets it — a relationship spans two points that may be in different neuropils, so
+    a single column on it would have to pick one, while a join back to ``points`` answers
+    either side. ``em_annotation.tables.body_roi_counts`` aggregates it per body.
     """
     src = _as_source(location, "points", locked, config)
     result = _dvid.fetch_points(src, body_ids(bodies), threads=threads)
+    if rois:
+        labelled = _dvid.label_point_rois(
+            src, result["points"], roi_set(rois, config=config),
+            on_overlap=on_roi_overlap)
+        result["points"] = labelled["points"]
+        result["rois"] = labelled
     if connections:
         return result["points"], result["relationships"], result["connections"]
     return result["points"], result["relationships"]
+
+
+def roi_set(rois: Sequence[str] | str, *, config=None) -> list[str]:
+    """An ROI name list from a list, a comma-separated string, or an ``@name`` config set."""
+    from . import config as _config
+
+    if isinstance(rois, str):
+        if rois.startswith(_config.REFERENCE_PREFIX):
+            cfg = config if config is not None else _config.load()
+            return cfg.roi_set(rois[len(_config.REFERENCE_PREFIX):])
+        return [r.strip() for r in rois.split(",") if r.strip()]
+    return [str(r).strip() for r in rois if str(r).strip()]
 
 
 def body_annotations(location="bodies", bodies=None, *, locked: bool = False, config=None):

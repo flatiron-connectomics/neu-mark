@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 # Imported as a MODULE, and every call below goes through it. A `from ... import name`
 # creates a second binding, so patching `em_volume_tools.dvid.instance_info` would leave
@@ -307,6 +307,185 @@ def fetch_synapse_counts(source: Mapping[str, Any], *, min_total: int = 10,
     out = out.rename(columns={out.columns[0]: "body"})
     out["body"] = out["body"].astype(tables.BODY_DTYPE)
     return out[["body", "pre", "post", "syn"]]
+
+
+# --------------------------------------------------------------------------- #
+# which neuropil each synapse is in
+# --------------------------------------------------------------------------- #
+#: What neuclease names label 0 — a point inside none of the given ROIs. Normalised to null
+#: in our tables, because "in no ROI" is missing data, not a region called `<unspecified>`.
+ROI_UNSPECIFIED = "<unspecified>"
+
+ROI_INSTANCE = "roi"
+
+
+def available_rois(source: Mapping[str, Any]) -> list[str]:
+    """Every ``roi`` instance on this node."""
+    try:
+        from neuclease.dvid import fetch_repo_info
+    except ImportError as exc:
+        raise ImportError(MISSING) from exc
+
+    server, uuid, _instance = _vdvid.address(source)
+    repo = fetch_repo_info(server, uuid)
+    return sorted(name for name, d in (repo.get("DataInstances") or {}).items()
+                  if d.get("Base", {}).get("TypeName") == ROI_INSTANCE)
+
+
+def resolve_roi_set(source: Mapping[str, Any], rois: Sequence[str]) -> list[str]:
+    """Validate an ROI name list against the node, before anything expensive happens.
+
+    Checked up front because building the combined volume fetches every named ROI — on
+    dvid.example.org that is ~1 s each — and a typo would otherwise surface as a failure or, worse,
+    as a silently smaller set of labelled points.
+    """
+    wanted = [str(r).strip() for r in rois if str(r).strip()]
+    if not wanted:
+        raise ValueError(
+            "no ROIs given. There is deliberately no default: the combined ROI volume is "
+            "built by overwriting, so asking for every ROI on the node would label a point "
+            "in ME(L) as whichever of ME(L) / OL(L) / all_neuropils was written last.")
+    duplicated = sorted({r for r in wanted if wanted.count(r) > 1})
+    if duplicated:
+        raise ValueError(f"ROI list repeats {', '.join(duplicated)}")
+    have = set(available_rois(source))
+    missing = [r for r in wanted if r not in have]
+    if missing:
+        raise ValueError(
+            f"no roi instance on this node named {', '.join(missing)}. "
+            f"{len(have)} are available; the closest are "
+            f"{', '.join(_closest(missing[0], have))}.")
+    return wanted
+
+
+def _closest(name: str, candidates: Iterable[str], n: int = 5) -> list[str]:
+    import difflib
+
+    return difflib.get_close_matches(name, sorted(candidates), n=n, cutoff=0.4) or \
+        sorted(candidates)[:n]
+
+
+#: What to do when the chosen ROIs intersect. Overlap is **expected to be small** in this
+#: dataset, and there is no principled tie-break — so the default proceeds and quantifies it
+#: rather than refusing. "error" is there for a caller who wants a strict partition.
+ON_OVERLAP = ("warn", "error")
+
+
+def label_point_rois(source: Mapping[str, Any], points, rois: Sequence[str], *,
+                     on_overlap: str = "warn", processes: int = 0) -> dict[str, Any]:
+    """Add a ``roi`` column to a points frame: which neuropil each synapse falls in.
+
+    Wraps ``neuclease.dvid.roi.determine_point_rois``, which builds one combined label
+    volume from the named ROIs and samples it at every point. Two properties worth knowing:
+
+    - It works at **scale 5** while taking scale-0 coordinates, so this is cheap: one small
+      volume, then a vectorised lookup for millions of points.
+    - It wants ``x``/``y``/``z`` **columns**, which our tables have by name — so there is no
+      flip here, and no opportunity for one. That is the payoff for never storing a bare
+      positional coordinate array.
+
+    ## Overlap
+
+    The combined volume is built by writing each ROI in turn, so where two intersect the
+    **later one wins** and the earlier is overwritten. There is no principled way to break
+    that tie, and in this dataset the intersections are expected to be small — so refusing
+    would be the wrong default.
+
+    Instead the ambiguity is *measured, in the unit that matters*: the volume is unpacked a
+    second time with the ROI order reversed and the two labellings compared, so the report
+    says how many of **your synapses** would be attributed differently. That is nearly free
+    — fetching the ROIs is the expensive step and it is not repeated; only the unpack is.
+    A voxel-overlap figure cannot answer "should I care"; a count of affected synapses can.
+
+    ``on_overlap="error"`` refuses instead, for a caller who needs a strict partition. This
+    dataset has deliberately-subtracted variants (``INP(-ATL)(L)``, ``PENP(-AMMC)``,
+    ``VLNP(-AOTU)(L)``) if one is wanted.
+    """
+    import pandas as pd
+
+    try:
+        from neuclease.dvid.roi import (determine_point_rois, fetch_roi_ranges_and_boxes,
+                                        unpack_roi_ranges_to_combined_volume)
+    except ImportError as exc:
+        raise ImportError(MISSING) from exc
+
+    if on_overlap not in ON_OVERLAP:
+        raise ValueError(f"on_overlap must be one of {', '.join(ON_OVERLAP)}; "
+                         f"got {on_overlap!r}")
+
+    names = resolve_roi_set(source, rois)
+    server, uuid, _instance = _vdvid.address(source)
+
+    logger.info("fetching %d ROIs", len(names))
+    # The fetch is the expensive half and is done once; unpacking is cheap and is what gets
+    # repeated below to measure the ambiguity.
+    ranges, boxes = fetch_roi_ranges_and_boxes(server, uuid, names, processes=processes)
+    volume, box, overlaps = unpack_roi_ranges_to_combined_volume(names, ranges, boxes)
+
+    overlapping = [] if overlaps is None or not len(overlaps) else [
+        (str(a), str(b), int(n)) for a, b, n in
+        overlaps[["roi_a", "roi_b", "overlap"]].itertuples(index=False)]
+    if overlapping and on_overlap == "error":
+        raise ValueError(
+            f"{len(overlapping)} of the given ROIs overlap, e.g. {overlapping[:4]}. The "
+            f"combined volume is built by overwriting, so every point in an intersection "
+            f"is attributed to whichever ROI was passed last. Choose a non-overlapping set "
+            f"(this dataset has subtracted variants such as INP(-ATL)(L) and PENP(-AMMC) "
+            f"for exactly this), or use on_overlap='warn' to proceed and have the affected "
+            f"synapse count reported.")
+
+    if not len(points):
+        out = points.copy()
+        out["roi"] = pd.Series(dtype="string")
+        return {"points": out, "rois": names, "labeled": 0, "unlabeled": 0,
+                "overlapping": overlapping, "ambiguous": 0, "counts": {}}
+
+    # determine_point_rois mutates in place and needs a unique index; both are satisfied by
+    # a copy with a fresh RangeIndex, and a copy keeps the caller's frame untouched.
+    work = points.reset_index(drop=True).copy()
+    determine_point_rois(server, uuid, names, work, combined_vol=volume, combined_box=box)
+    roi = work["roi"].astype("string")
+    roi = roi.where(roi != ROI_UNSPECIFIED, pd.NA)
+
+    ambiguous, ambiguous_counts = 0, {}
+    if overlapping:
+        # Reverse the priority and see which points change hands. Same fetched ranges, same
+        # box, so the only difference is which ROI wins an intersection.
+        reversed_names = list(reversed(names))
+        alt_vol, alt_box, _ = unpack_roi_ranges_to_combined_volume(
+            reversed_names, ranges, boxes, box_zyx=box)
+        alt = points.reset_index(drop=True).copy()
+        determine_point_rois(server, uuid, reversed_names, alt,
+                             combined_vol=alt_vol, combined_box=alt_box)
+        other = alt["roi"].astype("string")
+        other = other.where(other != ROI_UNSPECIFIED, pd.NA)
+        differs = (roi.fillna("") != other.fillna(""))
+        ambiguous = int(differs.sum())
+        # Which way each ambiguous point could have gone, so the report names the competing
+        # pair rather than just a count.
+        pairs = pd.Series([f"{x} | {y}" for x, y in
+                           zip(roi[differs].fillna("(none)"),
+                               other[differs].fillna("(none)"))], dtype="object")
+        ambiguous_counts = ({str(k): int(v) for k, v in pairs.value_counts().items()}
+                            if len(pairs) else {})
+        logger.warning(
+            "%d ROI pairs intersect; %d of %d synapses (%.2f%%) sit in an intersection and "
+            "are attributed by ROI ORDER alone: %s",
+            len(overlapping), ambiguous, len(roi), 100 * ambiguous / max(len(roi), 1),
+            ambiguous_counts or "none of yours")
+
+    out = points.reset_index(drop=True).copy()
+    out["roi"] = roi
+    # `roi_label` is an index into the ROI list and is meaningless without it; the list goes
+    # into the provenance record instead.
+    unlabeled = int(roi.isna().sum())
+    counts = {str(k): int(v) for k, v in roi.value_counts().items()}
+    logger.info("%d of %d points fell inside an ROI (%d outside every one)",
+                len(roi) - unlabeled, len(roi), unlabeled)
+    return {"points": out, "rois": names, "labeled": int(len(roi) - unlabeled),
+            "unlabeled": unlabeled, "overlapping": overlapping,
+            "ambiguous": ambiguous, "ambiguous_pairs": ambiguous_counts,
+            "counts": counts}
 
 
 def node_record(source: Mapping[str, Any], **extra: Any) -> dict[str, Any]:

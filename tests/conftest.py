@@ -79,7 +79,11 @@ KV_URL = "dvid://dvid.example.org/93fdbc:main/labels_annotations"
 SYN_INFO = {"Base": {"TypeName": "annotation", "Syncs": ["labels"]}}
 KV_INFO = {"Base": {"TypeName": "keyvalue", "Syncs": []}}
 LABELSZ_INFO = {"Base": {"TypeName": "labelsz", "Syncs": ["synapses"]}}
+ROI_INFO = {"Base": {"TypeName": "roi", "Syncs": []}}
 SZ_URL = "dvid://dvid.example.org/93fdbc:main/synapses_labelsz"
+
+#: ROI instances the stub server offers. `OL(L)` contains `ME(L)`, as on the real one.
+ROIS = ("ME(L)", "ME(R)", "OL(L)", "LO(L)")
 
 #: (pre, post) per body, chosen to cover the two shapes that make a TOTAL threshold the
 #: right default: body 2 is sensory-ish (almost no postsynapses), body 3 projects out of
@@ -146,7 +150,49 @@ def dvid_server(monkeypatch):
     monkeypatch.setattr(nd, "fetch_instance_info", fetch_instance_info)
     monkeypatch.setattr(nd, "fetch_repo_info", lambda server, uuid, **k: {
         "DataInstances": {"synapses": SYN_INFO, "synapses_labelsz": LABELSZ_INFO,
-                          "labels_annotations": KV_INFO}})
+                          "labels_annotations": KV_INFO,
+                          **{name: ROI_INFO for name in ROIS}}})
+
+    # ROIs. `OL(L)` contains `ME(L)` on the real server (measured: 214,883 voxels of
+    # overlap at scale 5), which is the hierarchy the overlap guard exists for.
+    import neuclease.dvid.roi as ndroi
+
+    def fetch_roi_ranges_and_boxes(server, uuid, rois, **k):
+        """The expensive half: one request per ROI. Stubbed as opaque per-name payloads."""
+        names = list(rois)
+        return {n: f"ranges:{n}" for n in names}, {n: f"box:{n}" for n in names}
+
+    def unpack_roi_ranges_to_combined_volume(roi_labels, ranges, boxes, box_zyx=None,
+                                             as_bool=False):
+        """The cheap half, called twice (forward and reversed) to measure the ambiguity."""
+        import numpy as np
+
+        names = list(roi_labels)
+        pairs = [(a_, b_, 214883) for i, a_ in enumerate(names)
+                 for b_ in names[i + 1:] if {a_, b_} <= {"ME(L)", "OL(L)"}]
+        overlaps = pd.DataFrame(pairs, columns=["roi_a", "roi_b", "overlap"])
+        return (np.zeros((2, 2, 2), np.uint8),
+                box_zyx if box_zyx is not None else np.array([[0, 0, 0], [2, 2, 2]]),
+                overlaps)
+
+    def determine_point_rois(server, uuid, rois, points_df, **k):
+        """Label by x: 10 -> the first ROI, 11 -> the last, anything else unlabelled."""
+        names = list(rois)
+        labels, values = [], []
+        for x in points_df["x"]:
+            if int(x) == 10:
+                labels.append(1); values.append(names[0])
+            elif int(x) == 11:
+                labels.append(len(names)); values.append(names[-1])
+            else:
+                labels.append(0); values.append("<unspecified>")
+        points_df["roi_label"] = labels
+        points_df["roi"] = values
+
+    monkeypatch.setattr(ndroi, "fetch_roi_ranges_and_boxes", fetch_roi_ranges_and_boxes)
+    monkeypatch.setattr(ndroi, "unpack_roi_ranges_to_combined_volume",
+                        unpack_roi_ranges_to_combined_volume)
+    monkeypatch.setattr(ndroi, "determine_point_rois", determine_point_rois)
 
     # labelsz: a ranked AllSyn threshold query, paged by offset, plus exact per-type counts.
     import neuclease.dvid.labelsz as ndsz

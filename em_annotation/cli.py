@@ -16,17 +16,20 @@ from . import __version__
 
 #: Repeated verbatim in both fetch subcommands, since `--src` is where the URL structure
 #: gets explained and it is the thing users are least likely to guess.
-_SRC_HELP = """\
-DVID source, as dvid://SERVER/UUID/INSTANCE — always three segments:
-  SERVER    host, optionally with a port (emdata3:8900). A bare host gets http://;
-            use dvid+https://HOST/... for TLS.
-  UUID      a node uuid (93fdbc, abbreviated is fine) OR a repo:branch ref
-            (93fdbc:main), which means "HEAD of that branch".
-  INSTANCE  the data instance name.
-A ':' in the server (port) or the uuid (branch) adds no segment; this splits on '/'.
-Or '@name' to look the instance up in your config (em_annotation.config); the
-resolved URL is printed, so the command still says what it read.
-"""
+# Flowing prose, not an aligned table: argparse re-wraps `help=` whatever formatter the
+# parser uses (RawDescriptionHelpFormatter only spares description/epilog), so the columns
+# never survived to the terminal — and in the docs the unindented line after an indented
+# block made docutils read it as a broken definition list, eight warnings' worth.
+_SRC_HELP = (
+    "DVID source as dvid://SERVER/UUID/INSTANCE, always three segments. "
+    "SERVER may carry a port (emdata3:8900); a bare host gets http://, so use "
+    "dvid+https://HOST/... for TLS. UUID may be a node uuid (93fdbc, abbreviated is "
+    "fine) or a repo:branch ref (93fdbc:main), meaning HEAD of that branch. INSTANCE is "
+    "the data instance name. A ':' in the server or the uuid adds no segment — this "
+    "splits on '/' alone. Alternatively '@name' looks the instance up in your config "
+    "(em_annotation.config), and the resolved URL is printed so the command still says "
+    "what it read. "
+)
 
 
 def _add_common(q: argparse.ArgumentParser, *, instance_hint: str,

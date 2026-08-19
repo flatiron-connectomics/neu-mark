@@ -164,6 +164,57 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
             "written": written, "record": record}
 
 
+def segment_properties(bodies_source: Mapping[str, Any], dst: str,
+                       bodies: Sequence[int], *,
+                       counts_source: Mapping[str, Any] | None = None,
+                       labelmap_source: Mapping[str, Any] | None = None,
+                       keep_glia: bool = True, link: bool = True) -> dict[str, Any]:
+    """Build a ``segment_properties`` source and, by default, link the volume to it.
+
+    ``dst`` is the **segmentation volume**: the document lands at
+    ``<dst>/segment_properties/info`` and the volume's own ``info`` gains a
+    ``"segment_properties"`` key pointing at that subdirectory. Those are two separate
+    steps and only the second is what makes neuroglancer show names and tags on the labels
+    layer — ``link=False`` writes the source without touching the published volume, which
+    is the right way to look at it first.
+
+    ``counts_source`` (a labelsz instance) adds ``pre``/``post``/``syn``; ``labelmap_source``
+    adds ``voxels``. Both are optional and both are cheap — measured ~5.6 s per 2,000 bodies
+    for sizes, so ~1 minute for a 20k list.
+    """
+    from . import segprops
+
+    frame = _dvid.fetch_body_annotations(bodies_source, bodies)["bodies"]
+    logger.info("%d of %d bodies have a property record", len(frame), len(bodies))
+
+    counts = None
+    if counts_source is not None:
+        counts = _dvid.fetch_synapse_counts_for(counts_source, bodies)
+    sizes = None
+    if labelmap_source is not None:
+        sizes = _dvid.fetch_voxel_counts(labelmap_source, bodies)
+
+    built = segprops.build(frame, counts=counts, sizes=sizes, keep_glia=keep_glia)
+    written = [segprops.write(dst, built["info"])]
+
+    linked = None
+    if link:
+        from em_volume_tools.ops.subresources import link_subresources
+
+        linked = link_subresources(dst, segment_properties=segprops.SUBDIR)
+        logger.info("linked %s into %s/info", linked, str(dst).rstrip("/"))
+
+    run = {"bodies_requested": len(bodies), "bodies_with_records": int(len(frame)),
+           "segments": built["report"]["bodies"], "excluded": built["report"]["excluded"],
+           "tags": built["report"]["tags"], "coverage": built["report"]["coverage"],
+           "numbers": built["report"]["numbers"], "keep_glia": keep_glia,
+           "linked": linked}
+    record = _record(bodies_source, dst, run=run)
+    _io.write_provenance(dst, record, name=f"{segprops.SUBDIR}/provenance")
+
+    return {**built, "written": written, "linked": linked, "record": record}
+
+
 def fetch_bodies(source: Mapping[str, Any], dst: str,
                  bodies: Sequence[int] | None = None, *,
                  fmt: str = "parquet", everything: bool = False) -> dict[str, Any]:

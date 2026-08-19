@@ -164,6 +164,47 @@ def build_parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_select_bodies)
 
     q = sub.add_parser(
+        "segment-properties",
+        help="a neuroglancer segment_properties source: names, tags and counts",
+        description="Build a `segment_properties` source from the per-body records and "
+                    "write it INTO a precomputed segmentation volume, so one neuroglancer "
+                    "layer shows each body's name, its tags and its synapse counts.\n\n"
+                    "`label` is the raw `instance` string — which is what lets this run "
+                    "before a cell-type parse is settled. Tags carry a facet prefix "
+                    "(group-, side-, col-) because the format allows only ONE tags "
+                    "property, so every facet has to pool into it.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    q.add_argument("--src", required=True, metavar="URL",
+                   help=_SRC_HELP + "For this command INSTANCE is the keyvalue instance "
+                        "holding the per-body records, e.g. 'labels_annotations'.")
+    q.add_argument("--dst", required=True, metavar="VOLUME",
+                   help="the precomputed SEGMENTATION VOLUME to write into (local or "
+                        "s3://…). The document lands at <dst>/segment_properties/info, and "
+                        "the volume's own info gains the key pointing at it. Accepts the "
+                        "same {uuid}/{branch}/{instance} placeholders.")
+    q.add_argument("--bodies", required=True, metavar="IDS",
+                   help="body ids: inline, or a .csv/.parquet/.feather with a body column, "
+                        "or a text file with one per line.")
+    q.add_argument("--body-column", metavar="NAME", default=None,
+                   help="which column holds the ids, if the table has several.")
+    q.add_argument("--counts", metavar="URL", default=None,
+                   help="a labelsz instance (or the annotation instance it indexes) to add "
+                        "`pre`, `post` and `syn` number properties. Cheap.")
+    q.add_argument("--labelmap", metavar="URL", default=None,
+                   help="a labelmap instance to add a `voxels` number property, from "
+                        "DVID's own /sizes. ~1 minute for 20k bodies.")
+    q.add_argument("--drop-glia", action="store_true",
+                   help="exclude glia-labelled bodies. By default they are KEPT and carry "
+                        "a `glia` tag — not connectome-relevant, but worth seeing.")
+    q.add_argument("--no-link", dest="link", action="store_false",
+                   help="write the source WITHOUT adding the key to the volume's info. Use "
+                        "this to inspect the output before touching a published volume; "
+                        "the linking step is what makes a viewer associate the two.")
+    q.add_argument("--dvid-locked", action="store_true",
+                   help="read the newest LOCKED ancestor rather than the branch HEAD.")
+    q.set_defaults(func=cmd_segment_properties, link=True)
+
+    q = sub.add_parser(
         "info", help="what a DVID annotation source is, and which node you would get",
         description="One request per fact: the instance type, what it is synced to, and "
                     "both candidate nodes for the ref (what it points at now, and the "
@@ -176,6 +217,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _parse_args(argv=None):
     return build_parser().parse_args(argv)
+
+
+def _resolve_src(value: str) -> str:
+    """An ``@name`` config reference as a URL; anything else unchanged."""
+    from . import config as _config
+
+    if isinstance(value, str) and value.startswith(_config.REFERENCE_PREFIX):
+        resolved = _config.load().resolve(value)
+        print(f"{value}  ->  {resolved}")
+        return resolved
+    return value
 
 
 def _src_spec(src: str) -> dict[str, Any]:
@@ -359,6 +411,38 @@ def cmd_select_bodies(args) -> int:
     listed = f"{out.rstrip('/')}/{result['written'][0]}"
     print(f"wrote {result['written'][0]} to {out}")
     print(f"  feed it onward with:  --bodies {listed}")
+    return 0
+
+
+def cmd_segment_properties(args) -> int:
+    from . import ops, segprops
+
+    bodies_src = ops.open_bodies_source(_src_spec(args.src),
+                                        prefer_locked=bool(args.dvid_locked))
+    counts_src = (ops.open_counts_source(_src_spec(args.counts),
+                                         prefer_locked=bool(args.dvid_locked))
+                  if args.counts else None)
+    labelmap_src = None
+    if args.labelmap:
+        from em_volume_tools.dvid import parse_url
+        labelmap_src = {"backend": "dvid", **parse_url(_resolve_src(args.labelmap))}
+        labelmap_src["uuid"] = bodies_src["uuid"]      # the SAME node, always
+
+    dst = _expand_out(args.dst, bodies_src)
+    ids = _load_bodies(args)
+
+    result = ops.segment_properties(
+        bodies_src, dst, ids, counts_source=counts_src, labelmap_source=labelmap_src,
+        keep_glia=not args.drop_glia, link=bool(args.link))
+
+    for line in segprops.format_report(result["report"]):
+        print(line)
+    print(f"wrote {', '.join(result['written'])} to {dst}")
+    if result["linked"]:
+        print(f"linked into {dst}/info: {result['linked']}")
+    else:
+        print("NOT linked — the volume's info is untouched, so a viewer will not associate "
+              "these with the labels layer. Re-run without --no-link when you are happy.")
     return 0
 
 

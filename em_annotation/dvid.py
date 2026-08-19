@@ -641,6 +641,52 @@ def fetch_all_body_annotations(source: Mapping[str, Any], *,
     return {"records": records, "ranges": per_range}
 
 
+def fetch_synapse_counts_for(source: Mapping[str, Any], bodies: Sequence[int]):
+    """Exact ``pre``/``post``/``syn`` for specific bodies, ignoring any threshold.
+
+    Distinct from :func:`fetch_synapse_counts`, which asks "which bodies are big"; this asks
+    "how big are these", which is what a caller with its own body list needs.
+    """
+    import pandas as pd
+
+    from neuclease.dvid import labelsz
+
+    server, uuid, instance = _vdvid.address(source)
+    ids = [int(b) for b in bodies]
+    pre = with_retry(
+        lambda: labelsz.fetch_counts(server, uuid, instance, ids, "PreSyn"),
+        label="labelsz PreSyn counts")
+    post = with_retry(
+        lambda: labelsz.fetch_counts(server, uuid, instance, ids, "PostSyn"),
+        label="labelsz PostSyn counts")
+    out = pd.DataFrame({"pre": pre.reindex(ids).fillna(0).astype("int64"),
+                        "post": post.reindex(ids).fillna(0).astype("int64")})
+    out["syn"] = out["pre"] + out["post"]
+    return out.rename_axis("body").reset_index()
+
+
+def fetch_voxel_counts(source: Mapping[str, Any], bodies: Sequence[int],
+                       *, batch_size: int = 1000) -> dict[int, int]:
+    """``{body: voxels}`` at full resolution, from the labelmap's own ``/sizes``.
+
+    Not from ``labelsz``: its ``'Voxels'`` element type needs a *labelvol* sync and, where
+    that is absent, returns an **empty result rather than an error** — which reads as "no
+    large bodies" instead of "unsupported". ``/sizes`` takes a body list and batches at
+    1,000 per request; measured ~5.6 s per 2,000 bodies, so ~1 minute for a 20k list.
+    """
+    try:
+        from neuclease.dvid import fetch_sizes
+    except ImportError as exc:
+        raise ImportError(MISSING) from exc
+
+    server, uuid, instance = _vdvid.address(source)
+    ids = [int(b) for b in bodies]
+    series = with_retry(
+        lambda: fetch_sizes(server, uuid, instance, ids, batch_size=batch_size),
+        label=f"sizes for {len(ids)} bodies")
+    return {int(b): int(v) for b, v in series.items()}
+
+
 def node_record(source: Mapping[str, Any], **extra: Any) -> dict[str, Any]:
     """The provenance record for this source, with whatever the caller wants added."""
     node = source.get("node") or _vdvid.resolve_node(source)

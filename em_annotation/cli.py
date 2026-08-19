@@ -205,6 +205,63 @@ def build_parser() -> argparse.ArgumentParser:
     q.set_defaults(func=cmd_segment_properties, link=True)
 
     q = sub.add_parser(
+        "annotation-source",
+        help="a neuroglancer precomputed annotation source: one LINE per connection",
+        description="Write a `neuroglancer_annotations_v1` LINE source, one line from each "
+                    "presynaptic site to each of its partners. Lines, not points, because a "
+                    "connectome is edges — and one endpoint pair is one annotation, so a "
+                    "T-bar with five partners contributes five.\n\n"
+                    "Input is the tables an earlier `points` run wrote (`--tables`), which "
+                    "is the cheap path: the tables are the durable artifact and a rebuild "
+                    "with different bounds or sharding need not refetch. Give `--src` and "
+                    "`--bodies` instead to fetch first.\n\n"
+                    "This is a SEPARATE source from the segmentation — unlike mesh and "
+                    "skeletons, an annotation layer cannot be named from a volume's info, so "
+                    "a viewer adds it as its own layer.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    q.add_argument("--dst", required=True, metavar="PATH",
+                   help="where the source goes (local or s3://…). Accepts the same "
+                        "{uuid}/{branch}/{instance} placeholders when --src is given.")
+    q.add_argument("--tables", metavar="DIR", default=None,
+                   help="a directory an earlier `points` run wrote, holding "
+                        "connections.parquet and points.parquet.")
+    q.add_argument("--src", metavar="URL", default=None,
+                   help=_SRC_HELP + "Only needed to fetch now instead of using --tables.")
+    q.add_argument("--bodies", metavar="IDS", default=None,
+                   help="body ids to fetch, when --src is given rather than --tables.")
+    q.add_argument("--body-column", metavar="NAME", default=None,
+                   help="which column holds the ids, if the table has several.")
+    q.add_argument("--voxel-size", metavar="X,Y,Z", default="8,8,8",
+                   help="nanometres per voxel of the frame the positions are in. Annotation "
+                        "coordinates are stored in VOXELS, and this is what puts them in the "
+                        "same physical space as the segmentation (default %(default)s).")
+    q.add_argument("--bounds", metavar="X0,Y0,Z0,X1,Y1,Z1", default=None,
+                   help="the source's lower and upper bound in voxels. Defaults to the "
+                        "data's own extent, padded by one voxel.")
+    q.add_argument("--drop-partial", dest="include_partial", action="store_false",
+                   help="drop lines with only one endpoint's body resolved. By default they "
+                        "are KEPT and undifferentiated: the partner is a real synapse whose "
+                        "body simply was not in the fetched set, and the line is still where "
+                        "the synapse is.")
+    q.add_argument("--per-cell", type=int, default=4_000, metavar="N",
+                   help="annotations a spatial cell aims to hold, which sets how many levels "
+                        "the grid needs and how much a zoomed-out view downloads "
+                        "(default %(default)s).")
+    q.add_argument("--threads", type=int, default=None, metavar="N",
+                   help="concurrent DVID requests, when fetching rather than using --tables.")
+    q.add_argument("--dvid-locked", action="store_true",
+                   help="read the newest LOCKED ancestor rather than the branch HEAD.")
+    q.add_argument("--verify", type=int, nargs="?", const=200, default=None, metavar="N",
+                   help="after writing, fetch N annotations back THROUGH the source's own "
+                        "info and compare them with the table. Everything before the write "
+                        "can be checked in memory; only a read-back proves the keys are "
+                        "right, and a wrong key leaves a viewer with nothing while every "
+                        "byte on the store is correct.")
+    q.add_argument("--dry-run", action="store_true",
+                   help="report the plan — lines, stride, levels, shards — write nothing.")
+    q.set_defaults(func=cmd_annotation_source, include_partial=True)
+
+    q = sub.add_parser(
         "info", help="what a DVID annotation source is, and which node you would get",
         description="One request per fact: the instance type, what it is synced to, and "
                     "both candidate nodes for the ref (what it points at now, and the "
@@ -443,6 +500,95 @@ def cmd_segment_properties(args) -> int:
     else:
         print("NOT linked — the volume's info is untouched, so a viewer will not associate "
               "these with the labels layer. Re-run without --no-link when you are happy.")
+    return 0
+
+
+def _triple(value: str, name: str, n: int = 3) -> list[float]:
+    parts = [p for p in value.replace(" ", "").split(",") if p]
+    if len(parts) != n:
+        raise SystemExit(f"{name} wants {n} comma-separated numbers, got {len(parts)}: "
+                         f"{value!r}")
+    return [float(p) for p in parts]
+
+
+def cmd_annotation_source(args) -> int:
+    from . import annsource, ops
+
+    if bool(args.tables) == bool(args.src):
+        raise SystemExit("pass --tables (reuse an earlier fetch) or --src plus --bodies "
+                         "(fetch now), not both and not neither.")
+
+    voxel_size = _triple(args.voxel_size, "--voxel-size")
+    bounds = None
+    if args.bounds:
+        b = _triple(args.bounds, "--bounds", 6)
+        bounds = (b[:3], b[3:])
+
+    kwargs: dict[str, Any] = {}
+    if args.tables:
+        from . import io as _io
+
+        conns, points = _io.read_tables(args.tables, ("connections", "points"))
+        dst = args.dst
+        kwargs.update(connections=conns, points=points)
+        print(f"tables: {len(conns):,} connections, {len(points):,} elements "
+              f"from {args.tables}")
+    else:
+        if not args.bodies:
+            raise SystemExit("--src needs --bodies: DVID cannot cheaply enumerate the "
+                             "bodies worth asking about.")
+        source = ops.open_points_source(_src_spec(args.src),
+                                        prefer_locked=bool(args.dvid_locked))
+        dst = _expand_out(args.dst, source)
+        kwargs.update(source=source, bodies=_load_bodies(args))
+        if args.threads is not None:
+            kwargs["threads"] = args.threads
+
+    if args.dry_run:
+        # Everything except the write, so the plan reported is the plan that would run.
+        import numpy as np
+
+        from . import tables as _t
+        if "connections" not in kwargs:
+            raise SystemExit("--dry-run needs --tables; there is nothing to plan before "
+                             "the fetch has happened.")
+        frame = _t.enrich_connections(kwargs["connections"], kwargs["points"])
+        if bounds is None:
+            corners = np.vstack([_t.positions_xyz(frame, "pre_"),
+                                 _t.positions_xyz(frame, "post_")]).astype(float)
+            bounds = (corners.min(axis=0), corners.max(axis=0) + 1.0)
+        built = annsource.build(frame, lower_bound=bounds[0], upper_bound=bounds[1],
+                                voxel_size_xyz=voxel_size, per_cell=args.per_cell,
+                                include_partial=bool(args.include_partial))
+        for line in annsource.format_report(built["report"]):
+            print(line)
+        print(f"would write to {dst} (nothing written)")
+        return 0
+
+    result = ops.annotation_source(dst, voxel_size_xyz=voxel_size, bounds=bounds,
+                                   include_partial=bool(args.include_partial),
+                                   per_cell=args.per_cell, **kwargs)
+    for line in annsource.format_report(result["report"]):
+        print(line)
+    print(f"wrote {', '.join(result['written'])} to {dst}")
+
+    if args.verify:
+        check = annsource.verify(dst, result["table"], sample=args.verify)
+        body = check["body_check"]
+        print(f"verified {check['sampled']} annotations read back through the source's info")
+        if body:
+            print(f"  body {body['body']}: {body['found']} lines in the pre index, "
+                  f"table says {body['expected']}")
+        if check["problems"]:
+            print(f"{len(check['problems'])} PROBLEMS — the source is not what the table "
+                  f"says:", file=sys.stderr)
+            for problem in check["problems"][:10]:
+                print(f"  {problem}", file=sys.stderr)
+            return 1
+        print("  no problems")
+
+    print("add it in neuroglancer as its own layer — an annotation source cannot be named "
+          "from the segmentation's info the way mesh and skeletons are.")
     return 0
 
 

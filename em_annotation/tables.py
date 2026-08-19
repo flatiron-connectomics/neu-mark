@@ -257,6 +257,37 @@ def connections(rels: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def enrich_connections(conns: pd.DataFrame, points: pd.DataFrame,
+                       columns: Sequence[str] = ("conf",)) -> pd.DataFrame:
+    """Bring per-element columns onto a connections table as ``pre_<col>`` / ``post_<col>``.
+
+    :func:`connections` carries only geometry and the two body ids, because that is all a
+    relationship row knows. Anything recorded on the *element* — its confidence, the ROI it
+    sits in — has to be joined back from ``points`` on the coordinate, which is safe because a
+    position identifies at most one element (:func:`position_index` checks that).
+
+    **A missing value stays NaN rather than becoming 0.** For a half-resolved line the partner
+    element was never fetched, so its confidence is genuinely unknown; zero would claim the
+    annotator had no confidence in a real synapse. NaN also fails every shader comparison, so
+    ``if (prop_conf_post() < threshold) discard;`` leaves such a line visible — the permissive
+    reading, which is the right default for data whose partner simply was not requested.
+    """
+    missing = [c for c in columns if c not in points.columns]
+    if missing:
+        raise KeyError(
+            f"points has no column(s) {', '.join(missing)}; it has "
+            f"{', '.join(map(str, points.columns))}")
+    lut = points.drop_duplicates(subset=list(AXES)).set_index(list(AXES))[list(columns)]
+    out = conns.copy()
+    for side in ("pre", "post"):
+        keys = pd.MultiIndex.from_arrays(
+            [conns[f"{side}_{a}"] for a in AXES], names=list(AXES))
+        got = lut.reindex(keys)
+        for col in columns:
+            out[f"{side}_{col}"] = got[col].to_numpy()
+    return out
+
+
 def match_rate(conns: pd.DataFrame) -> dict[str, Any]:
     """How much of the connectivity the body list actually resolved.
 

@@ -139,6 +139,60 @@ def test_a_single_annotation_round_trips_including_its_relationships():
     assert off + 32 == len(blob)
 
 
+def test_the_decoder_agrees_with_the_hand_written_one():
+    """`decode_group` is used to read a written source back, so it must not be the encoder's
+    mirror image — the two tests above read the bytes independently, and this pins the decoder
+    to that same reading rather than to `encode_group`'s internals."""
+    props = [{"id": "conf", "type": "float32"}, {"id": "roi", "type": "int16"},
+             {"id": "kind", "type": "uint8"}]
+    geometry = np.arange(3 * 6, dtype="<f4").reshape(3, 6)
+    values = {"conf": [0.25, 0.5, 0.75], "roi": [1, 2, 3], "kind": [10, 20, 30]}
+    got = ann.decode_group(
+        ann.encode_group(geometry, [11, 22, 33], properties=props, values=values),
+        properties=props)
+    assert np.array_equal(got["geometry"], geometry)
+    assert np.array_equal(got["ids"], [11, 22, 33])
+    assert np.allclose(got["values"]["conf"], values["conf"])
+    assert np.array_equal(got["values"]["roi"], values["roi"])
+    assert np.array_equal(got["values"]["kind"], values["kind"])
+
+
+def test_a_single_record_decodes_back_to_its_relationships():
+    props = [{"id": "conf", "type": "float32"}]
+    got = ann.decode_single(
+        ann.encode_single([1, 2, 3, 4, 5, 6], properties=props, values={"conf": 0.875},
+                          relationships=[[100, 101], [200]]),
+        properties=props, n_relationships=2)
+    assert list(got["geometry"]) == [1, 2, 3, 4, 5, 6]
+    assert got["values"]["conf"] == 0.875
+    assert got["relationships"] == [[100, 101], [200]]
+
+
+def test_an_empty_relationship_decodes_as_an_empty_list():
+    """A line with one endpoint's body unknown declares a zero-length relationship, and the
+    difference between that and 'no relationship member' is the whole record's shape."""
+    got = ann.decode_single(
+        ann.encode_single([0] * 6, relationships=[[7], []]), n_relationships=2)
+    assert got["relationships"] == [[7], []]
+
+
+def test_decoding_with_the_wrong_property_list_is_refused_not_misread():
+    """The stride comes from the property list, so decoding with the wrong one would silently
+    reinterpret every field. The length check is what turns that into an error."""
+    blob = ann.encode_group(np.zeros((4, 6), "<f4"), [1, 2, 3, 4],
+                            properties=[{"id": "c", "type": "float32"}],
+                            values={"c": np.zeros(4)})
+    with pytest.raises(ValueError, match="expected"):
+        ann.decode_group(blob, properties=[{"id": "c", "type": "float32"},
+                                           {"id": "d", "type": "float32"}])
+
+
+def test_decoding_a_single_record_with_too_few_relationships_is_refused():
+    blob = ann.encode_single([0] * 6, relationships=[[1], [2]])
+    with pytest.raises(ValueError, match="trailing bytes"):
+        ann.decode_single(blob, n_relationships=1)
+
+
 def test_geometry_of_the_wrong_shape_is_refused():
     with pytest.raises(ValueError, match=r"expected \(2, 6\)"):
         ann.encode_group(np.zeros((2, 3), "<f4"), [1, 2])

@@ -164,6 +164,67 @@ def fetch_points(source: Mapping[str, Any], dst: str, bodies: Sequence[int], *,
             "written": written, "record": record}
 
 
+def annotation_source(dst: str, *, connections=None, points=None,
+                      source: Mapping[str, Any] | None = None,
+                      bodies: Sequence[int] | None = None,
+                      voxel_size_xyz: Sequence[float] = (8.0, 8.0, 8.0),
+                      bounds: tuple[Sequence[float], Sequence[float]] | None = None,
+                      include_partial: bool = True, per_cell: int = 4_000,
+                      threads: int = _dvid.DEFAULT_THREADS) -> dict[str, Any]:
+    """Write a precomputed LINE annotation source: one line per synaptic connection.
+
+    Either pass ``connections`` and ``points`` (from an earlier ``em-annot points`` run — the
+    tables are the durable artifact, so a rebuild need not refetch) or a ``source`` plus
+    ``bodies`` to fetch now.
+
+    ``bounds`` defaults to the data's own extent, padded by one voxel so no annotation sits
+    exactly on the upper bound. The format requires ``lower_bound``/``upper_bound``, and a
+    viewer uses them to size its spatial navigation.
+    """
+    import numpy as np
+
+    from . import annsource, tables as _t
+
+    if connections is None:
+        if source is None or not bodies:
+            raise ValueError("pass connections+points, or source+bodies to fetch")
+        fetched = _dvid.fetch_points(source, bodies, threads=threads)
+        connections, points = fetched["connections"], fetched["points"]
+        logger.info("fetched %d elements -> %d connections",
+                    len(points), len(connections))
+    if points is None:
+        raise ValueError("points are needed to attach each endpoint's confidence")
+
+    enriched = _t.enrich_connections(connections, points, columns=("conf",))
+
+    if bounds is None:
+        corners = np.vstack([_t.positions_xyz(enriched, "pre_"),
+                             _t.positions_xyz(enriched, "post_")]).astype(float)
+        bounds = (corners.min(axis=0), corners.max(axis=0) + 1.0)
+
+    built = annsource.build(enriched, lower_bound=bounds[0], upper_bound=bounds[1],
+                            voxel_size_xyz=voxel_size_xyz,
+                            include_partial=include_partial, per_cell=per_cell)
+    written = annsource.write(dst, built)
+
+    run = {"lines": built["report"]["lines"], "connections": built["report"]["connections"],
+           "both_bodies": built["report"]["both_bodies"],
+           "one_body": built["report"]["one_body"],
+           "include_partial": include_partial,
+           "levels": len(built["info"]["spatial"]),
+           "stride": built["report"]["stride"]}
+    if source is not None:
+        record = _record(source, dst, run=run)
+    else:
+        from em_volume_tools.ops.provenance import build_record
+        record = build_record(src_spec={"backend": "tables"}, dst=dst, **run)
+        record["tool"] = "em-annotation"
+    _io.write_provenance(dst, record)
+    # `table` is the enriched frame the source was built from, returned so a caller verifying
+    # the result compares against exactly that rather than re-deriving it.
+    return {**built, "written": written, "record": record, "table": enriched}
+
+
 def segment_properties(bodies_source: Mapping[str, Any], dst: str,
                        bodies: Sequence[int], *,
                        counts_source: Mapping[str, Any] | None = None,

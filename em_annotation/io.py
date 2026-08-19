@@ -35,7 +35,7 @@ from __future__ import annotations
 import io as _io
 import json
 import logging
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,40 @@ def read_table(src: str, name: str, *, fmt: str = "parquet"):
     if fmt == "feather":
         return pd.read_feather(buf)
     return pd.read_csv(buf)
+
+
+#: Preference order when reading a table whose format was not stated. parquet first because
+#: it is what `write_table` defaults to, and csv last because it is the one that cannot
+#: round-trip a nullable uint64 body id.
+READ_FORMATS = ("parquet", "feather", "csv")
+
+
+def read_tables(src: str, names: Sequence[str]) -> tuple:
+    """Read several tables out of one directory, detecting each one's format.
+
+    The point is that a caller pointing at an earlier run's output should not have to know
+    or restate which ``--format`` that run used.
+    """
+    from em_volume_tools.location import exists
+
+    out = []
+    for name in names:
+        for fmt in READ_FORMATS:
+            if exists(src, table_name(name, fmt)):
+                break
+        else:
+            raise FileNotFoundError(
+                f"no {name} table at {str(src).rstrip('/')} — looked for "
+                + ", ".join(table_name(name, f) for f in READ_FORMATS))
+        frame = read_table(src, name, fmt=fmt)
+        if fmt == "csv":
+            # Warn rather than refuse: for a points table csv is merely lossy at the edges,
+            # but a body id that came back as float64 is silently wrong above 2**53.
+            logger.warning("%s was read from csv; uint64 body ids do not survive that "
+                           "round trip. Re-fetch with --format parquet if ids look odd.",
+                           name)
+        out.append(frame)
+    return tuple(out)
 
 
 def read_embedded_provenance(src: str, name: str) -> dict | None:

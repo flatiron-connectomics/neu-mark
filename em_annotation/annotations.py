@@ -168,6 +168,63 @@ def encode_single(geometry: Sequence[float], *, annotation_type: str = LINE,
     return bytes(out)
 
 
+def decode_group(raw: bytes, *, annotation_type: str = LINE,
+                 properties: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """Invert :func:`encode_group`. Returns ``{"ids", "geometry", "values"}``.
+
+    This exists so the layout can be pinned by round trip rather than by asserting byte
+    offsets that only restate the encoder — and so a written source can be read back and
+    checked against the table it came from, which is the only end-to-end evidence that a
+    viewer will see the right thing.
+    """
+    props = list(properties)
+    floats = GEOMETRY_FLOATS[annotation_type]
+    stride = record_size(annotation_type, props)
+    (n,) = struct.unpack_from("<Q", raw, 0)
+    expected = 8 + n * stride + n * 8
+    if len(raw) != expected:
+        raise ValueError(f"{len(raw)} bytes for {n} annotations at stride {stride}; "
+                         f"expected {expected}")
+    body = np.frombuffer(raw, dtype="u1", count=n * stride, offset=8).reshape(n, stride)
+    ids = np.frombuffer(raw, dtype="<u8", count=n, offset=8 + n * stride)
+    geometry = body[:, :4 * floats].copy().view("<f4").reshape(n, floats)
+
+    values, offset = {}, 4 * floats
+    for p in props:
+        size, dtype = PROPERTY_TYPES[p["type"]]
+        values[p["id"]] = body[:, offset:offset + size].copy().view(dtype).reshape(n)
+        offset += size
+    return {"ids": ids, "geometry": geometry, "values": values}
+
+
+def decode_single(raw: bytes, *, annotation_type: str = LINE,
+                  properties: Sequence[Mapping[str, Any]] = (),
+                  n_relationships: int = 0) -> dict[str, Any]:
+    """Invert :func:`encode_single`. Returns ``{"geometry", "values", "relationships"}``."""
+    props = list(properties)
+    floats = GEOMETRY_FLOATS[annotation_type]
+    geometry = np.frombuffer(raw, dtype="<f4", count=floats, offset=0)
+
+    values, offset = {}, 4 * floats
+    for p in props:
+        size, dtype = PROPERTY_TYPES[p["type"]]
+        values[p["id"]] = np.frombuffer(raw, dtype=dtype, count=1, offset=offset)[0]
+        offset += size
+    offset += -offset % 4
+
+    relationships = []
+    for _ in range(n_relationships):
+        (count,) = struct.unpack_from("<I", raw, offset)
+        offset += 4
+        relationships.append(
+            np.frombuffer(raw, dtype="<u8", count=count, offset=offset).tolist())
+        offset += 8 * count
+    if offset != len(raw):
+        raise ValueError(f"{len(raw) - offset} trailing bytes after {n_relationships} "
+                         f"relationships; the record is not the shape declared")
+    return {"geometry": geometry, "values": values, "relationships": relationships}
+
+
 def build_info(*, lower_bound: Sequence[float], upper_bound: Sequence[float],
                voxel_size_xyz: Sequence[float], annotation_type: str = LINE,
                properties: Sequence[Mapping[str, Any]] = (),

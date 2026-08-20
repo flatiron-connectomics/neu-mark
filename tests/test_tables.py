@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from em_annotation import tables
+from neu_mark import tables
 
 
 def el(pos_xyz, kind, *, rels=(), **prop):

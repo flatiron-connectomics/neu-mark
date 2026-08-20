@@ -1,15 +1,15 @@
 """The two stage-1 operations end to end, with DVID stubbed at the neuclease boundary.
 
 Stubbed at ``neuclease.dvid.*`` rather than at this package's own functions, so the code
-under test is the code that runs in production — the em-volume-tools lesson that a test
+under test is the code that runs in production — the neu-vol lesson that a test
 building its own spec by hand proves nothing about the path that runs (invariant 9).
 """
 
 import pandas as pd
 import pytest
 
-from em_annotation import io, ops
-from em_annotation import dvid as ann_dvid
+from neu_mark import io, ops
+from neu_mark import dvid as ann_dvid
 
 from conftest import (BODY_RECORDS, COUNTS, ELEMENTS, KV_URL, LABELSZ_INFO,
                       SYN_INFO, SZ_URL, URL, _open, _src)
@@ -26,10 +26,10 @@ def test_points_writes_both_tables_and_a_provenance_sidecar(tmp_path, dvid_serve
     assert len(io.read_table(out, "points")) == 2
     assert len(io.read_table(out, "relationships")) == 3
 
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     rec = read_json(out, "provenance.json")
-    assert rec["tool"] == "em-annotation"
+    assert rec["tool"] == "neu-mark"
     assert rec["source"]["uuid"] == "d38898"
 
 
@@ -68,7 +68,7 @@ def test_drop_unmatched_is_opt_in(tmp_path, dvid_server):
 
 
 def test_the_match_rate_is_recorded_in_the_provenance(tmp_path, dvid_server):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out = str(tmp_path / "o")
     ops.fetch_points(_open(), out, [1, 2])
@@ -105,7 +105,7 @@ def test_an_unsynced_annotation_instance_is_refused_up_front(tmp_path, monkeypat
                                                              dvid_server):
     """Without a sync there is no /label endpoint, so this would otherwise surface as one
     failure per body."""
-    import em_volume_tools.dvid as vdvid
+    import neu_vol.dvid as vdvid
 
     monkeypatch.setattr(vdvid, "instance_info",
                         lambda spec: {"Base": {"TypeName": "annotation", "Syncs": []}})
@@ -120,10 +120,10 @@ def test_a_keyvalue_instance_is_refused_for_points(tmp_path, dvid_server):
 
 def test_the_ref_is_resolved_to_a_concrete_uuid_before_any_fetch(tmp_path, dvid_server):
     """A branch ref names a node that moves; a table half from one node and half from the
-    next is not a snapshot. Same discipline as em-volume-tools' invariant 9."""
+    next is not a snapshot. Same discipline as neu-vol' invariant 9."""
     out = str(tmp_path / "o")
     ops.fetch_points(_open(), out, [1])
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     src = read_json(out, "provenance.json")["source"]
     assert src["uuid"] == "d38898" and src["requested"] == "93fdbc:main"
@@ -132,7 +132,7 @@ def test_the_ref_is_resolved_to_a_concrete_uuid_before_any_fetch(tmp_path, dvid_
 def test_dvid_locked_selects_the_locked_ancestor(tmp_path, dvid_server):
     out = str(tmp_path / "o")
     ops.fetch_points(_open(locked=True), out, [1])
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     assert read_json(out, "provenance.json")["source"]["uuid"] == "846e3a"
 
@@ -179,7 +179,7 @@ def test_the_whole_instance_is_read_without_ever_calling_keys(tmp_path, dvid_ser
 
 
 def test_the_key_ranges_are_recorded_in_the_provenance(tmp_path, dvid_server):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out = str(tmp_path / "all")
     ops.fetch_bodies(_open(KV_URL, "bodies"), out, everything=True)
@@ -203,7 +203,7 @@ def test_a_boundary_key_arriving_twice_is_not_an_error(dvid_server, monkeypatch)
     That is why summing per-range counts overcounts (58,395 against 58,394 real records)."""
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     def overlapping(server, uuid, instance, lo, hi, **k):
         # every range returns the same boundary record, as an inclusive bound would
@@ -218,7 +218,7 @@ def test_the_same_key_with_different_values_is_an_error(dvid_server, monkeypatch
     """A repeat is expected; a repeat that disagrees means the snapshot is not coherent."""
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     seen = {"n": 0}
 
@@ -237,7 +237,7 @@ def test_a_failing_range_is_split_rather_than_retried_whole(dvid_server, monkeyp
     static bucket size is a bet on load — splitting on failure removes the bet."""
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     attempted = []
 
@@ -260,7 +260,7 @@ def test_a_failing_range_is_split_rather_than_retried_whole(dvid_server, monkeyp
 def test_splitting_gives_up_at_a_bounded_depth(dvid_server, monkeypatch):
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     monkeypatch.setattr(ad, "MAX_SPLIT_DEPTH", 1)
     monkeypatch.setattr(ndk, "fetch_keyrangevalues",
@@ -272,7 +272,7 @@ def test_splitting_gives_up_at_a_bounded_depth(dvid_server, monkeypatch):
 def test_refine_drops_candidates_outside_the_range():
     """`hi` is not always the next character after `lo`: splitting ' '..'0' gives ' 0'..' 9',
     and splitting that again would put ' 0' after ' 9' and produce unsorted boundaries."""
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     assert ad.refine(" ", " 0") == [" ", " 0"]        # nothing strictly between
     inner = ad.refine(" ", "0")
@@ -285,7 +285,7 @@ def test_a_dead_server_fails_quickly_rather_than_recursing(dvid_server, monkeypa
     itself, which at depth 3 was ~16,000 requests."""
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     calls = {"n": 0}
 
@@ -309,7 +309,7 @@ def test_a_split_that_cannot_subdivide_is_what_stops_the_recursion(dvid_server,
     Verified here on a digit range, where subdivision otherwise looks unbounded."""
     import neuclease.dvid.keyvalue as ndk
 
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     calls = {"n": 0}
 
@@ -326,7 +326,7 @@ def test_a_split_that_cannot_subdivide_is_what_stops_the_recursion(dvid_server,
 
 
 def test_refine_stays_lexicographically_sorted():
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     bounds = ad.refine("1", "2")
     assert bounds == sorted(bounds)
@@ -335,14 +335,14 @@ def test_refine_stays_lexicographically_sorted():
 
 
 def test_unsorted_boundaries_are_refused():
-    from em_annotation import dvid as ad
+    from neu_mark import dvid as ad
 
     with pytest.raises(ValueError, match="must be sorted"):
         ad.key_ranges(["5", "1"])
 
 
 def test_cli_all_writes_the_whole_instance(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     out = str(tmp_path / "all")
     assert main(["bodies", "--src", KV_URL, "--out", out, "--all"]) == 0
@@ -352,7 +352,7 @@ def test_cli_all_writes_the_whole_instance(tmp_path, dvid_server, capsys):
 
 
 def test_cli_refuses_both_or_neither(tmp_path, dvid_server):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     with pytest.raises(SystemExit, match="pass one, not both"):
         main(["bodies", "--src", KV_URL, "--out", str(tmp_path / "o"),
@@ -453,7 +453,7 @@ def test_an_empty_result_names_the_silent_unindexed_failure(tmp_path, dvid_serve
 
 
 def test_paging_collects_every_body_beyond_one_page(tmp_path, dvid_server, monkeypatch):
-    monkeypatch.setattr("em_annotation.dvid._LABELSZ_PAGE", 2)
+    monkeypatch.setattr("neu_mark.dvid._LABELSZ_PAGE", 2)
     _out, r = _select(tmp_path, dvid_server, min_synapses=1)
     assert r["bodies"]["body"].tolist() == [1, 2, 3, 4]
 
@@ -461,8 +461,8 @@ def test_paging_collects_every_body_beyond_one_page(tmp_path, dvid_server, monke
 def test_the_deep_paging_cap_warns_rather_than_silently_truncating(tmp_path, dvid_server,
                                                                   monkeypatch, caplog):
     """Per-page cost grows with offset, so there is a cap — but a capped result must say so."""
-    monkeypatch.setattr("em_annotation.dvid._LABELSZ_PAGE", 1)
-    monkeypatch.setattr("em_annotation.dvid._MAX_SELECT", 2)
+    monkeypatch.setattr("neu_mark.dvid._LABELSZ_PAGE", 1)
+    monkeypatch.setattr("neu_mark.dvid._MAX_SELECT", 2)
     with caplog.at_level("WARNING"):
         _out, r = _select(tmp_path, dvid_server, min_synapses=1)
     assert len(r["bodies"]) == 2
@@ -471,7 +471,7 @@ def test_the_deep_paging_cap_warns_rather_than_silently_truncating(tmp_path, dvi
 
 def test_the_list_records_which_node_it_was_computed_from(tmp_path, dvid_server):
     """Proofreading changes body ids, so a list nobody can date is one that goes stale."""
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out, r = _select(tmp_path, dvid_server, min_synapses=10)
     rec = read_json(out, "provenance.json")
@@ -482,7 +482,7 @@ def test_the_list_records_which_node_it_was_computed_from(tmp_path, dvid_server)
 
 def test_the_written_list_is_a_valid_bodies_input(tmp_path, dvid_server):
     """Closes the loop: what select-bodies writes is what --bodies reads."""
-    from em_annotation import bodies as body_reader
+    from neu_mark import bodies as body_reader
 
     out, r = _select(tmp_path, dvid_server, min_synapses=10)
     path = f"{out}/{r['written'][0]}"
@@ -501,7 +501,7 @@ def test_csv_is_the_default_and_is_lossless_here(tmp_path, dvid_server, caplog):
 # CLI
 # --------------------------------------------------------------------------- #
 def test_cli_select_bodies_prints_the_command_to_run_next(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     out = str(tmp_path / "sel")
     assert main(["select-bodies", "--src", URL, "--out", out,
@@ -513,7 +513,7 @@ def test_cli_select_bodies_prints_the_command_to_run_next(tmp_path, dvid_server,
 
 
 def test_cli_points_runs_and_expands_the_uuid_placeholder(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     dst = str(tmp_path / "syn_{uuid:6}")
     assert main(["points", "--src", URL, "--out", dst, "--bodies", "1,2"]) == 0
@@ -528,8 +528,8 @@ def test_the_destination_is_named_after_the_node_actually_read(tmp_path, dvid_se
     directory was named after HEAD, because the CLI expanded {uuid} before resolving. The
     provenance said one node and the path said another — worse than no name, since the
     path is what someone browsing a directory believes."""
-    from em_annotation.cli import main
-    from em_volume_tools.location import read_json
+    from neu_mark.cli import main
+    from neu_vol.location import read_json
 
     dst = str(tmp_path / "syn_{uuid:6}")
     main(["points", "--src", URL, "--out", dst, "--bodies", "1", "--dvid-locked"])
@@ -542,7 +542,7 @@ def test_the_destination_is_named_after_the_node_actually_read(tmp_path, dvid_se
 
 
 def test_cli_warns_loudly_when_coverage_is_low(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     main(["points", "--src", URL, "--out", str(tmp_path / "o"), "--bodies", "1"])
     out = capsys.readouterr().out
@@ -551,14 +551,14 @@ def test_cli_warns_loudly_when_coverage_is_low(tmp_path, dvid_server, capsys):
 
 
 def test_cli_refuses_a_non_dvid_source(tmp_path):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     with pytest.raises(SystemExit, match="not a DVID URL"):
         main(["points", "--src", "/local/path", "--out", str(tmp_path), "--bodies", "1"])
 
 
 def test_cli_info_shows_the_type_the_sync_and_both_nodes(dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     assert main(["info", "--src", URL]) == 0
     out = capsys.readouterr().out
@@ -568,7 +568,7 @@ def test_cli_info_shows_the_type_the_sync_and_both_nodes(dvid_server, capsys):
 
 
 def test_cli_bodies_writes_elsewhere(tmp_path, dvid_server):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     out = str(tmp_path / "ann")
     assert main(["bodies", "--src", KV_URL, "--out", out, "--bodies", "1,2"]) == 0

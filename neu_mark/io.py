@@ -24,10 +24,10 @@ local-scratch case where write speed matters more than portability.
 
 ## Every write goes through the kvstore
 
-``em_volume_tools.location.write_bytes``, never ``open()`` — so ``--out`` may be a local
+``neu_vol.location.write_bytes``, never ``open()`` — so ``--out`` may be a local
 path or ``s3://…`` with no branch in the caller. pyarrow can serialise to a buffer, which
 is what makes this possible; a ``to_parquet(path)`` would quietly write nothing useful to
-an object store. Same rule, and same reason, as em-seg-morpho's ``precomputed.py``.
+an object store. Same rule, and same reason, as neu-morpho's ``precomputed.py``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ FORMATS = ("parquet", "csv", "feather")
 _EXT = {"parquet": ".parquet", "csv": ".csv", "feather": ".feather"}
 
 #: Key under which the provenance record is embedded in a parquet file's own metadata.
-METADATA_KEY = b"em_annotation_provenance"
+METADATA_KEY = b"neu_mark_provenance"
 
 
 def table_name(name: str, fmt: str) -> str:
@@ -103,7 +103,7 @@ def _warn_csv(df) -> None:
 def write_table(df, dst: str, name: str, *, fmt: str = "parquet",
                 metadata: Mapping[str, Any] | None = None) -> str:
     """Serialise ``df`` and write it under ``dst``. Returns the key written."""
-    from em_volume_tools.location import write_bytes
+    from neu_vol.location import write_bytes
 
     key = table_name(name, fmt)
     write_bytes(dst, _to_bytes(df, fmt, metadata), key)
@@ -115,7 +115,7 @@ def read_table(src: str, name: str, *, fmt: str = "parquet"):
     """Read a table back, for tests and for the stage that consumes these files."""
     import pandas as pd
 
-    from em_volume_tools.location import read_bytes
+    from neu_vol.location import read_bytes
 
     raw = read_bytes(src, table_name(name, fmt))
     if raw is None:
@@ -140,7 +140,7 @@ def read_tables(src: str, names: Sequence[str]) -> tuple:
     The point is that a caller pointing at an earlier run's output should not have to know
     or restate which ``--format`` that run used.
     """
-    from em_volume_tools.location import exists
+    from neu_vol.location import exists
 
     out = []
     for name in names:
@@ -166,7 +166,7 @@ def read_embedded_provenance(src: str, name: str) -> dict | None:
     """The provenance record stored inside a parquet file, if it is there."""
     import pyarrow.parquet as pq
 
-    from em_volume_tools.location import read_bytes
+    from neu_vol.location import read_bytes
 
     raw = read_bytes(src, table_name(name, "parquet"))
     if raw is None:
@@ -182,9 +182,9 @@ def write_provenance(dst: str, record: Mapping[str, Any], *,
 
     A sidecar *as well as* the parquet metadata, because csv and feather have nowhere to
     put it and a record that only sometimes exists is one nobody learns to look for. Same
-    argument as em-volume-tools' ``ops/provenance.py``, whose record shape this reuses.
+    argument as neu-vol' ``ops/provenance.py``, whose record shape this reuses.
     """
-    from em_volume_tools.location import write_json
+    from neu_vol.location import write_json
 
     try:
         write_json(dst, dict(record), f"{name}.json")

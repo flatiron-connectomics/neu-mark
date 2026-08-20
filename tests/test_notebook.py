@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from conftest import KV_URL, SZ_URL, URL
-from em_annotation import notebook as nb
+from neu_mark import notebook as nb
 
 
 def test_select_bodies_returns_a_frame_and_writes_nothing(tmp_path, dvid_server,
@@ -108,7 +108,7 @@ def test_an_unknown_kind_lists_the_valid_ones(dvid_server):
 
 
 def test_a_config_reference_resolves(dvid_server, tmp_path, monkeypatch):
-    from em_annotation import config
+    from neu_mark import config
 
     path = tmp_path / "c.toml"
     path.write_text('[dvid]\nserver = "dvid.example.org"\n'
@@ -118,7 +118,7 @@ def test_a_config_reference_resolves(dvid_server, tmp_path, monkeypatch):
 
 
 def test_a_bare_name_without_a_config_says_what_to_do(monkeypatch, tmp_path):
-    from em_annotation import config
+    from neu_mark import config
 
     monkeypatch.delenv(config.ENV_VAR, raising=False)
     # No config anywhere above a fresh tmp dir, so the upward walk finds nothing.
@@ -132,28 +132,28 @@ def test_a_bare_name_without_a_config_says_what_to_do(monkeypatch, tmp_path):
 # the lazy top-level exports
 # --------------------------------------------------------------------------- #
 def test_the_notebook_names_are_importable_from_the_package_root():
-    import em_annotation
+    import neu_mark
 
     for name in ("source", "select_bodies", "points", "body_annotations",
                  "synapse_counts", "body_ids", "rule", "RuleSet"):
-        assert hasattr(em_annotation, name), name
-        assert name in dir(em_annotation)
+        assert hasattr(neu_mark, name), name
+        assert name in dir(neu_mark)
 
 
 def test_importing_the_package_does_not_pull_pandas():
     """`cli` reads __version__ from __init__, so an eager import here would make
-    `em-annot --help` pay for pandas and em-volume-tools."""
+    `neu-mark --help` pay for pandas and neu-vol."""
     import subprocess
     import sys
 
-    code = ("import sys, em_annotation; "
-            "print('pandas' in sys.modules, 'em_volume_tools' in sys.modules)")
+    code = ("import sys, neu_mark; "
+            "print('pandas' in sys.modules, 'neu_vol' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert out.stdout.strip() == "False False", out.stdout + out.stderr
 
 
 def test_an_unknown_attribute_still_raises_attribute_error():
-    import em_annotation
+    import neu_mark
 
     with pytest.raises(AttributeError, match="has no attribute 'nope'"):
-        em_annotation.nope
+        neu_mark.nope

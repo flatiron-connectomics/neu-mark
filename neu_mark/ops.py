@@ -9,7 +9,7 @@ to expand ``--dst {uuid:8}`` *before* calling them, so with ``--dvid-locked`` th
 were correctly read from the locked node while the directory was named after HEAD. The
 provenance said one node and the path said another, which is worse than having no name at
 all: the name is what someone browsing a directory believes. Resolving in the caller makes
-the ordering impossible to get wrong, and is the same discipline as em-volume-tools'
+the ordering impossible to get wrong, and is the same discipline as neu-vol'
 invariant 9.
 
 Fetch for an explicit body list, write tables, write provenance **after** the tables.
@@ -96,10 +96,10 @@ def select_bodies(source: Mapping[str, Any], dst: str, *, min_synapses: int = 10
 
 
 def _record(source: Mapping[str, Any], dst: str, *, run: Mapping[str, Any]) -> dict:
-    from em_volume_tools.ops.provenance import build_record
+    from neu_vol.ops.provenance import build_record
 
     record = build_record(src_spec={"backend": "dvid", **dict(source)}, dst=dst, **run)
-    record["tool"] = "em-annotation"
+    record["tool"] = "neu-mark"
     record["source"] = _dvid.node_record(source)
     return record
 
@@ -173,7 +173,7 @@ def annotation_source(dst: str, *, connections=None, points=None,
                       threads: int = _dvid.DEFAULT_THREADS) -> dict[str, Any]:
     """Write a precomputed LINE annotation source: one line per synaptic connection.
 
-    Either pass ``connections`` and ``points`` (from an earlier ``em-annot points`` run — the
+    Either pass ``connections`` and ``points`` (from an earlier ``neu-mark points`` run — the
     tables are the durable artifact, so a rebuild need not refetch) or a ``source`` plus
     ``bodies`` to fetch now.
 
@@ -216,9 +216,9 @@ def annotation_source(dst: str, *, connections=None, points=None,
     if source is not None:
         record = _record(source, dst, run=run)
     else:
-        from em_volume_tools.ops.provenance import build_record
+        from neu_vol.ops.provenance import build_record
         record = build_record(src_spec={"backend": "tables"}, dst=dst, **run)
-        record["tool"] = "em-annotation"
+        record["tool"] = "neu-mark"
     _io.write_provenance(dst, record)
     # `table` is the enriched frame the source was built from, returned so a caller verifying
     # the result compares against exactly that rather than re-deriving it.
@@ -260,7 +260,7 @@ def segment_properties(bodies_source: Mapping[str, Any], dst: str,
 
     linked = None
     if link:
-        from em_volume_tools.ops.subresources import link_subresources
+        from neu_vol.ops.subresources import link_subresources
 
         linked = link_subresources(dst, segment_properties=segprops.SUBDIR)
         logger.info("linked %s into %s/info", linked, str(dst).rstrip("/"))

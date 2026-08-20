@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from em_annotation import io, tables
+from neu_mark import io, tables
 
 
 @pytest.fixture()
@@ -71,7 +71,7 @@ def test_provenance_travels_inside_the_parquet_file(tmp_path, frame):
 
 
 def test_provenance_sidecar_is_written_for_every_format(tmp_path):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out = str(tmp_path / "t")
     io.write_provenance(out, {"source": {"uuid": "abc"}})
@@ -95,7 +95,7 @@ def test_an_unknown_format_is_refused_by_name():
 
 def test_the_module_never_opens_a_file_directly():
     """Every write goes through location.write_bytes, or an s3 destination silently
-    writes nothing. Same rule and same reason as em-seg-morpho's precomputed.py.
+    writes nothing. Same rule and same reason as neu-morpho's precomputed.py.
 
     Checked over the parsed AST, not the source text: the module docstring *discusses*
     `open()` and `to_parquet(path)`, and a text search cannot tell prose from a call.

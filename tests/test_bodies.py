@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from em_annotation import bodies
+from neu_mark import bodies
 
 
 def test_inline_list_accepts_commas_and_whitespace():
@@ -48,7 +48,7 @@ def test_parquet_round_trips_through_the_reader(tmp_path):
 
 def test_this_packages_own_bodies_table_is_a_valid_input(tmp_path):
     """So a body list from one node feeds the next fetch with no intermediate step."""
-    from em_annotation import tables
+    from neu_mark import tables
 
     df = tables.keyvalues_to_frame({"5": {"bodyid": 5}, "9": {"bodyid": 9}})
     p = tmp_path / "bodies.parquet"

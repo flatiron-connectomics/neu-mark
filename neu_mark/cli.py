@@ -1,6 +1,6 @@
-"""``em-annot`` — the command line over em_annotation.
+"""``neu-mark`` — the command line over neu_mark.
 
-Argparse, matching its siblings (`em-vol`, `em-morpho`) rather than introducing a second
+Argparse, matching its siblings (`neu-vol`, `neu-morpho`) rather than introducing a second
 CLI framework into the family. Heavy imports stay inside the subcommand that needs them so
 `--help` is fast.
 """
@@ -27,7 +27,7 @@ _SRC_HELP = (
     "fine) or a repo:branch ref (93fdbc:main), meaning HEAD of that branch. INSTANCE is "
     "the data instance name. A ':' in the server or the uuid adds no segment — this "
     "splits on '/' alone. Alternatively '@name' looks the instance up in your config "
-    "(em_annotation.config), and the resolved URL is printed so the command still says "
+    "(neu_mark.config), and the resolved URL is printed so the command still says "
     "what it read. "
 )
 
@@ -61,11 +61,11 @@ def _add_common(q: argparse.ArgumentParser, *, instance_hint: str,
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="em-annot",
+        prog="neu-mark",
         description="Fetch DVID annotations into tables, and publish them to "
                     "neuroglancer.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--version", action="version", version=f"em-annotation {__version__}")
+    p.add_argument("--version", action="version", version=f"neu-mark {__version__}")
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -295,7 +295,7 @@ def _src_spec(src: str) -> dict[str, Any]:
     should say what that file turned it into. The provenance record stores the resolved URL
     regardless, so a config cannot make an export less traceable.
     """
-    from em_volume_tools.dvid import is_url, parse_url
+    from neu_vol.dvid import is_url, parse_url
 
     from . import config as _config
 
@@ -320,7 +320,7 @@ def _expand_out(out: str, source: dict[str, Any]) -> str:
     after the branch HEAD even under ``--dvid-locked``, i.e. after a node the tables did
     not come from — and the path is what someone browsing a directory believes.
     """
-    from em_volume_tools.ops.naming import expand, has_placeholder
+    from neu_vol.ops.naming import expand, has_placeholder
 
     if not has_placeholder(out):
         return out
@@ -481,7 +481,7 @@ def cmd_segment_properties(args) -> int:
                   if args.counts else None)
     labelmap_src = None
     if args.labelmap:
-        from em_volume_tools.dvid import parse_url
+        from neu_vol.dvid import parse_url
         labelmap_src = {"backend": "dvid", **parse_url(_resolve_src(args.labelmap))}
         labelmap_src["uuid"] = bodies_src["uuid"]      # the SAME node, always
 
@@ -593,7 +593,7 @@ def cmd_annotation_source(args) -> int:
 
 
 def cmd_info(args) -> int:
-    from em_volume_tools.dvid import (instance_info, instance_type, node_summary,
+    from neu_vol.dvid import (instance_info, instance_type, node_summary,
                                      synced_instances)
 
     src = _src_spec(args.src)

@@ -8,7 +8,7 @@ and still be wrong in ways only a viewer shows, so what is testable is pinned he
 import pandas as pd
 import pytest
 
-from em_annotation import segprops
+from neu_mark import segprops
 
 BODIES = pd.DataFrame({
     "body": pd.Series([1, 2, 3, 4, 5, 6, 7], dtype="uint64"),
@@ -107,7 +107,7 @@ def test_ids_are_base_ten_strings():
 
 
 def test_the_at_type_is_what_link_subresources_checks_for():
-    from em_volume_tools.ops.subresources import SUBRESOURCE_TYPES
+    from neu_vol.ops.subresources import SUBRESOURCE_TYPES
 
     assert _built()["info"]["@type"] == SUBRESOURCE_TYPES["segment_properties"]
 
@@ -232,7 +232,7 @@ def test_numbers_are_omitted_when_not_supplied():
 # writing
 # --------------------------------------------------------------------------- #
 def test_it_writes_where_the_info_key_will_point(tmp_path):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     dst = str(tmp_path / "vol")
     key = segprops.write(dst, _built()["info"])

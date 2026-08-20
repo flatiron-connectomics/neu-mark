@@ -2,7 +2,7 @@
 
 One LINE per distinct (T-bar, PSD) coordinate pair. Writes the four things the format
 requires: an ``info``, a ``by_id`` index, one index per relationship, and one or more spatial
-levels — all sharded through :mod:`em_volume_tools.sharded`, so tensorstore owns the shard
+levels — all sharded through :mod:`neu_vol.sharded`, so tensorstore owns the shard
 format and this module owns only what goes in it.
 
 ## Annotation ids are hashed from the geometry, not counted
@@ -103,13 +103,13 @@ def _cells(points: np.ndarray, lower: np.ndarray, chunk: np.ndarray,
     """Which cell each point falls in, as the **key a viewer will ask for**.
 
     That key is the cell's compressed Morton code, not a row-major flattening — see
-    :func:`em_volume_tools.sharded.compressed_morton_code`, which explains why substituting one
+    :func:`neu_vol.sharded.compressed_morton_code`, which explains why substituting one
     for the other produces a complete file that renders almost nothing.
 
     Points are xyz, ``grid``/``chunk`` are xyz, and the Morton code is defined over xyz with x
     varying fastest, so no axis order changes hands here.
     """
-    from em_volume_tools.sharded import compressed_morton_code
+    from neu_vol.sharded import compressed_morton_code
 
     idx = np.floor((points - lower) / chunk).astype(np.int64)
     np.clip(idx, 0, grid - 1, out=idx)
@@ -227,12 +227,12 @@ def build(connections, *, lower_bound: Sequence[float], upper_bound: Sequence[fl
     """Everything needed to write a source, from a ``connections`` table.
 
     Returns ``{"info", "by_id", "relationships", "spatial", "report"}`` where the index values
-    are ``{key: [(chunk_id, payload)]}`` ready for :func:`em_volume_tools.sharded.write_all`.
+    are ``{key: [(chunk_id, payload)]}`` ready for :func:`neu_vol.sharded.write_all`.
     Nothing is written here, so the caller can inspect or test it first.
     """
     import pandas as pd
 
-    from em_volume_tools import sharded
+    from neu_vol import sharded
 
     from . import tables
 
@@ -364,8 +364,8 @@ def build(connections, *, lower_bound: Sequence[float], upper_bound: Sequence[fl
 
 def write(dst: str, built: Mapping[str, Any]) -> list[str]:
     """Write the ``info`` and every index. Returns the keys written."""
-    from em_volume_tools import sharded
-    from em_volume_tools.location import write_json
+    from neu_vol import sharded
+    from neu_vol.location import write_json
 
     info = built["info"]
     write_json(dst, dict(info), "info")
@@ -396,8 +396,8 @@ def read_annotation(src: str, annotation_id: int, *, info: Mapping[str, Any] | N
     the sharded index, using the ``info`` the source itself declares — so it is the check that
     the file is addressable and not merely present.
     """
-    from em_volume_tools import sharded
-    from em_volume_tools.location import read_json
+    from neu_vol import sharded
+    from neu_vol.location import read_json
 
     if info is None:
         info = read_json(src, "info")
@@ -414,8 +414,8 @@ def read_annotation(src: str, annotation_id: int, *, info: Mapping[str, Any] | N
 def read_related(src: str, relationship: str, body: int, *,
                  info: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
     """One body's annotations from a relationship index, decoded — a viewer's keyed fetch."""
-    from em_volume_tools import sharded
-    from em_volume_tools.location import read_json
+    from neu_vol import sharded
+    from neu_vol.location import read_json
 
     if info is None:
         info = read_json(src, "info")
@@ -441,7 +441,7 @@ def verify(src: str, connections, *, sample: int = 200, seed: int = 0) -> dict[s
     **keys** are right — a wrong key gives a viewer nothing while every byte on the store is
     correct.
     """
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     from . import tables
 
@@ -512,8 +512,8 @@ def verify_spatial(src: str, info: Mapping[str, Any], *, per_level: int = 3,
       A right key over a wrong assignment renders annotations in the wrong place, which looks
       like a coordinate bug rather than an index one.
     """
-    from em_volume_tools import sharded
-    from em_volume_tools.location import read_json
+    from neu_vol import sharded
+    from neu_vol.location import read_json
 
     if info is None:
         info = read_json(src, "info")

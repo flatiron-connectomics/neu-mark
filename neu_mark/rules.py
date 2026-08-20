@@ -6,7 +6,7 @@ mean what. It lives with the body lists, not in this repo, and is loaded by path
 
 ## Why a decorator rather than a plain dict of functions
 
-``em_annotation.explore`` accepts a bare ``{name: callable}`` and always will, because that
+``neu_mark.explore`` accepts a bare ``{name: callable}`` and always will, because that
 is what you reach for in the first five minutes. The decorator adds the four things that
 matter once rules are being maintained rather than tried out:
 
@@ -165,7 +165,7 @@ class RuleSet:
         return [r.name for r in self.rules]
 
     def as_mapping(self) -> dict[str, Callable]:
-        """``{name: callable}``, for the :mod:`em_annotation.explore` functions."""
+        """``{name: callable}``, for the :mod:`neu_mark.explore` functions."""
         return {r.name: r.values for r in self.rules}
 
     def require(self, frame: pd.DataFrame) -> None:
@@ -228,7 +228,7 @@ def from_module(path: str | Path, *, variable: str = "RULES") -> RuleSet:
     path = Path(path).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"no rules module at {path}")
-    spec = importlib.util.spec_from_file_location(f"em_annotation_rules_{path.stem}", path)
+    spec = importlib.util.spec_from_file_location(f"neu_mark_rules_{path.stem}", path)
     if spec is None or spec.loader is None:                       # pragma: no cover
         raise ImportError(f"cannot load a module from {path}")
     module = importlib.util.module_from_spec(spec)

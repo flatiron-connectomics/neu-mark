@@ -11,7 +11,7 @@ faster. `--basetemp`, by contrast, `rm -rf`s the path it is given at session sta
 retains nothing, so a failed run's artifacts are gone.
 
 Escape hatches, in the order they win: an explicit `--basetemp` (pytest ignores the
-temproot entirely), an inherited `PYTEST_DEBUG_TEMPROOT`, and `EM_TESTS_TMPFS=0` to force
+temproot entirely), an inherited `PYTEST_DEBUG_TEMPROOT`, and `NEU_TESTS_TMPFS=0` to force
 the platform default.
 
 The *code* below is duplicated in all four em-* repos, which are separate git repos and
@@ -34,7 +34,7 @@ _CANDIDATES = ("/dev/shm", "/run/shm")
 
 def _tmpfs_root() -> str | None:
     """A writable tmpfs directory with room to spare, or None to leave the default."""
-    if os.environ.get("EM_TESTS_TMPFS") == "0":
+    if os.environ.get("NEU_TESTS_TMPFS") == "0":
         return None
     for candidate in _CANDIDATES:
         root = Path(candidate)
@@ -65,13 +65,13 @@ if _root is not None:
 # A stubbed DVID, shared by every test that reads one.
 #
 # Stubbed at the `neuclease.dvid.*` boundary rather than at this package's own functions,
-# so the code under test is the code that runs in production — the em-volume-tools lesson
+# so the code under test is the code that runs in production — the neu-vol lesson
 # that a test building its own spec by hand proves nothing about the path that runs.
 # --------------------------------------------------------------------------- #
 import pandas as pd
 import pytest
 
-from em_annotation import ops
+from neu_mark import ops
 
 URL = "dvid://dvid.example.org/93fdbc:main/synapses"
 KV_URL = "dvid://dvid.example.org/93fdbc:main/labels_annotations"
@@ -107,7 +107,7 @@ BODY_RECORDS = {
 
 @pytest.fixture(autouse=True)
 def _no_node_cache():
-    from em_volume_tools.dvid import clear_node_cache
+    from neu_vol.dvid import clear_node_cache
 
     clear_node_cache()
     yield
@@ -122,7 +122,7 @@ def dvid_server(monkeypatch):
     import neuclease.dvid.annotation as nda
     import neuclease.dvid.keyvalue as ndk
 
-    import em_volume_tools.dvid as vdvid
+    import neu_vol.dvid as vdvid
 
     asked = []
 
@@ -249,7 +249,7 @@ def dvid_server(monkeypatch):
 
 
 def _src(url=URL):
-    from em_volume_tools.dvid import parse_url
+    from neu_vol.dvid import parse_url
 
     return {"backend": "dvid", **parse_url(url)}
 

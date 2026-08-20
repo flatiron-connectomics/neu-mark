@@ -4,12 +4,12 @@ import pandas as pd
 import pytest
 
 from conftest import ROIS, URL, _open
-from em_annotation import dvid as ad
-from em_annotation import io, notebook as nb, ops, tables
+from neu_mark import dvid as ad
+from neu_mark import io, notebook as nb, ops, tables
 
 
 def _src():
-    from em_volume_tools.dvid import parse_url
+    from neu_vol.dvid import parse_url
 
     return {"backend": "dvid", **parse_url(URL)}
 
@@ -88,7 +88,7 @@ def test_an_unknown_overlap_policy_lists_the_valid_ones(dvid_server):
 
 
 def test_cli_strict_rois_refuses(tmp_path, dvid_server):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     with pytest.raises(SystemExit, match="ROIs overlap"):
         main(["points", "--src", URL, "--out", str(tmp_path / "o"), "--bodies", "1,2",
@@ -96,7 +96,7 @@ def test_cli_strict_rois_refuses(tmp_path, dvid_server):
 
 
 def test_cli_reports_the_ambiguity_by_default(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     main(["points", "--src", URL, "--out", str(tmp_path / "o"), "--bodies", "1,2",
           "--rois", "ME(L),OL(L)"])
@@ -181,7 +181,7 @@ def test_body_roi_counts_without_a_roi_column_says_how_to_get_one(dvid_server):
 # through ops and the CLI
 # --------------------------------------------------------------------------- #
 def test_ops_writes_the_roi_column_and_records_the_set(tmp_path, dvid_server):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out = str(tmp_path / "syn")
     ops.fetch_points(_open(), out, [1, 2], rois=["ME(L)", "LO(L)"])
@@ -192,7 +192,7 @@ def test_ops_writes_the_roi_column_and_records_the_set(tmp_path, dvid_server):
 
 
 def test_no_rois_means_no_column_and_no_record(tmp_path, dvid_server):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     out = str(tmp_path / "syn")
     ops.fetch_points(_open(), out, [1, 2])
@@ -201,7 +201,7 @@ def test_no_rois_means_no_column_and_no_record(tmp_path, dvid_server):
 
 
 def test_cli_reports_how_many_synapses_landed_in_a_roi(tmp_path, dvid_server, capsys):
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     main(["points", "--src", URL, "--out", str(tmp_path / "o"), "--bodies", "1,2",
           "--rois", "ME(L),LO(L)"])
@@ -212,7 +212,7 @@ def test_cli_reports_how_many_synapses_landed_in_a_roi(tmp_path, dvid_server, ca
 def test_cli_takes_a_roi_file(tmp_path, dvid_server, capsys):
     path = tmp_path / "rois.txt"
     path.write_text("# optic lobe\nME(L)\nLO(L)   # left only\n")
-    from em_annotation.cli import main
+    from neu_mark.cli import main
 
     main(["points", "--src", URL, "--out", str(tmp_path / "o"), "--bodies", "1,2",
           "--rois", str(path)])
@@ -220,8 +220,8 @@ def test_cli_takes_a_roi_file(tmp_path, dvid_server, capsys):
 
 
 def test_cli_resolves_a_config_roi_set(tmp_path, dvid_server, capsys, monkeypatch):
-    from em_annotation import config
-    from em_annotation.cli import main
+    from neu_mark import config
+    from neu_mark.cli import main
 
     cfg = tmp_path / "c.toml"
     cfg.write_text('[dvid]\nserver = "s"\nuuid = "u"\n\n'
@@ -234,7 +234,7 @@ def test_cli_resolves_a_config_roi_set(tmp_path, dvid_server, capsys, monkeypatc
 
 
 def test_an_unknown_config_roi_set_lists_the_known_ones(tmp_path, monkeypatch):
-    from em_annotation import config
+    from neu_mark import config
 
     cfg = tmp_path / "c.toml"
     cfg.write_text('[roi_sets]\noptic = ["ME(L)"]\n')

@@ -16,7 +16,7 @@ import struct
 import numpy as np
 import pytest
 
-from em_annotation import annotations as ann
+from neu_mark import annotations as ann
 
 #: A property mix whose byte layout matches the validated case: float32 x4, uint32 x2, int16,
 #: uint16, uint8 x9 = 37 bytes, which pads a 24-byte LINE geometry to a 64-byte stride.

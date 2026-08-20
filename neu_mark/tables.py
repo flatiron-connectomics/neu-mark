@@ -3,7 +3,7 @@
 ## Axis order
 
 DVID stores a position as ``Pos: [x, y, z]`` and neuclease's parsers hand back ``x``,
-``y``, ``z`` columns. em-libraries holds coordinates **zyx in memory** (CLAUDE.md
+``y``, ``z`` columns. neu-suite holds coordinates **zyx in memory** (CLAUDE.md
 invariant 2), and the precomputed annotation format stores **xyz on disk**. So there are
 three conventions in play and the mirroring bug they invite — a position reflected through
 the ``z=x`` diagonal — produces a *valid* annotation in the wrong place, which no shape,
@@ -313,7 +313,7 @@ def body_roi_counts(points: pd.DataFrame, *, kind_column: str = "kind") -> pd.Da
     """
     if "roi" not in points.columns:
         raise KeyError(
-            "no 'roi' column: fetch the points with a ROI set (em-annot points --rois, or "
+            "no 'roi' column: fetch the points with a ROI set (neu-mark points --rois, or "
             "notebook.points(..., rois=[...])) to label each synapse with its neuropil.")
     have = [c for c in ("body", kind_column, "roi") if c in points.columns]
     counts = (points[have].dropna(subset=["roi"])

@@ -3,7 +3,7 @@
 Every function here takes a DataFrame and returns a DataFrame. Nothing prints, nothing
 reads or writes, and nothing needs a DVID connection — so this is usable straight from a
 notebook, which is where the work actually happens: you look at the vocabulary, write a
-rule, see what it missed, and go round again. ``em-annot instance-report`` is a thin
+rule, see what it missed, and go round again. ``neu-mark instance-report`` is a thin
 terminal wrapper over the same calls.
 
 Named ``explore`` rather than ``inspect`` to avoid shadowing the standard library module of
@@ -224,7 +224,7 @@ def coverage(frame: pd.DataFrame, rules: Mapping[str, Callable],
     The number to watch. A rule written against a dirty vocabulary under-fires silently,
     and low coverage is indistinguishable from "the data does not have this" unless it is
     put in front of you — the same failure class as the partner match rate in
-    :mod:`em_annotation.tables`.
+    :mod:`neu_mark.tables`.
     """
     applied = apply_rules(frame, rules)
     total = len(frame)

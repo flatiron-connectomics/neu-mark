@@ -1,7 +1,7 @@
 """Building a neuroglancer ``segment_properties`` source from the body annotations.
 
 The format is one **inline** JSON document — there is no sharded form — so the whole thing
-is a dict, and every write goes through ``em_volume_tools.location`` like the rest of this
+is a dict, and every write goes through ``neu_vol.location`` like the rest of this
 package.
 
 ## What the spec allows, and what that forces
@@ -92,7 +92,7 @@ def normalize_tag(value: Any) -> str | None:
     Lowercased because matching is case-insensitive, so ``Traced`` and ``traced`` are the
     same tag and keeping both would put two indistinguishable chips in the viewer.
 
-    Missingness goes through :func:`em_annotation.explore.normalize`, which is the one place
+    Missingness goes through :func:`neu_mark.explore.normalize`, which is the one place
     that knows ``pd.NA`` is neither ``None`` nor a float. Testing it by hand here is how
     16,606 bodies acquired a tag reading ``group-<na>``: ``pd.NA is not None`` is True and
     ``str(pd.NA)`` is the *truthy* string ``"<NA>"``.
@@ -276,7 +276,7 @@ def _number_properties(ids: Sequence[str], *, counts=None, sizes=None) -> list[d
 
 def write(dst: str, info: Mapping[str, Any], *, subdir: str = SUBDIR) -> str:
     """Write the document to ``<dst>/<subdir>/info`` through the kvstore."""
-    from em_volume_tools.location import write_json
+    from neu_vol.location import write_json
 
     write_json(dst, dict(info), subdir, "info")
     logger.info("wrote %s/%s/info (%d segments)", str(dst).rstrip("/"), subdir,

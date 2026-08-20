@@ -5,8 +5,8 @@ import re
 import pandas as pd
 import pytest
 
-from em_annotation import rules
-from em_annotation.rules import Rule, RuleSet, rule
+from neu_mark import rules
+from neu_mark.rules import Rule, RuleSet, rule
 
 BODIES = pd.DataFrame({
     "body": pd.Series([1, 2, 3, 4], dtype="uint64"),
@@ -186,7 +186,7 @@ def test_keep_is_an_explicit_allowlist():
 # --------------------------------------------------------------------------- #
 MODULE = '''
 import re
-from em_annotation import rule
+from neu_mark import rule
 
 KEEP = ["instance", "type"]
 

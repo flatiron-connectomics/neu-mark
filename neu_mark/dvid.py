@@ -1,6 +1,6 @@
 """Fetching annotations out of DVID, for a given set of bodies.
 
-Addressing and version resolution are em-volume-tools' (``em_volume_tools.dvid``): a
+Addressing and version resolution are neu-vol' (``neu_vol.dvid``): a
 ``dvid://server/uuid/instance`` URL, a ref resolved **once** to a concrete node, and the
 provenance record that names it. This module adds the two reads that matter here.
 
@@ -23,7 +23,7 @@ every body's frame at the end, and it has no retry and no per-body error isolati
 failed HTTP request loses the batch.
 
 So: a thread pool, because this is I/O bound; ``with_retry`` per body, reusing
-em-volume-tools' classifier, which already knows the ``requests``-flavoured transient
+neu-vol' classifier, which already knows the ``requests``-flavoured transient
 markers DVID produces; and failures collected per body rather than raised, because a run
 over thousands of bodies should report the three that failed and keep the rest.
 
@@ -40,13 +40,13 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Mapping, Sequence
 
 # Imported as a MODULE, and every call below goes through it. A `from ... import name`
-# creates a second binding, so patching `em_volume_tools.dvid.instance_info` would leave
+# creates a second binding, so patching `neu_vol.dvid.instance_info` would leave
 # this module calling the real one — a test that stubs DVID would silently start needing
 # the network. One module attribute is one patch point; the same rule holds in
-# em-volume-tools' own backends/dvid.py, for the same reason.
-from em_volume_tools import dvid as _vdvid
-from em_volume_tools.dvid import MISSING
-from em_volume_tools.retry import with_retry
+# neu-vol' own backends/dvid.py, for the same reason.
+from neu_vol import dvid as _vdvid
+from neu_vol.dvid import MISSING
+from neu_vol.retry import with_retry
 
 from . import tables
 
@@ -67,7 +67,7 @@ def open_source(spec: Mapping[str, Any], *, expect: str | tuple[str, ...],
     """Resolve the ref, check the instance type, and return the pinned spec.
 
     The returned spec carries the **concrete uuid**, never the ref. Same discipline as
-    em-volume-tools' invariant 9 and for the same reason: a nightly lock-and-spawn landing
+    neu-vol' invariant 9 and for the same reason: a nightly lock-and-spawn landing
     mid-run would otherwise move HEAD, and a table half from one node and half from the
     next is not a snapshot of anything.
     """

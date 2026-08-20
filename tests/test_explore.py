@@ -7,7 +7,7 @@ expressing doubt, trailing whitespace, and a body with no instance at all.
 import pandas as pd
 import pytest
 
-from em_annotation import explore as ex
+from neu_mark import explore as ex
 
 BODIES = pd.DataFrame({
     "body": pd.Series([1, 2, 3, 4, 5, 6, 7], dtype="uint64"),

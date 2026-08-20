@@ -1,4 +1,4 @@
-# em-annotation
+# neu-mark
 
 Annotations out of DVID, into columnar tables, and on into neuroglancer.
 
@@ -20,8 +20,8 @@ dependency** — it needs `libdvid-cpp`, `vigra` and `dvidutils`, all conda-only
 flyem-forge:
 
 ```bash
-mamba install -n em-lib -c flyem-forge -c conda-forge neuclease
-pip install --no-deps -e ./em-annotation
+mamba install -n neu-env -c flyem-forge -c conda-forge neuclease
+pip install --no-deps -e ./neu-mark
 ```
 
 ## Usage
@@ -54,21 +54,21 @@ provenance record naming it, rather than a bare list of ids.
 
 ```bash
 # what am I pointing at, and which node would I get?
-em-annot info --src dvid://dvid.example.org/93fdbc:main/synapses
+neu-mark info --src dvid://dvid.example.org/93fdbc:main/synapses
 
 # build the body list itself, from DVID's ranked synapse index (~20 s)
-em-annot select-bodies \
+neu-mark select-bodies \
     --src dvid://dvid.example.org/93fdbc:main/synapses \
     --min-synapses 10 --out 'bodies_{uuid:8}/' --dvid-locked
 
 # synapses for a body list -> points.parquet + relationships.parquet
-em-annot points \
+neu-mark points \
     --src dvid://dvid.example.org/93fdbc:main/synapses \
     --bodies traced_neurons.csv \
     --out synapses_{uuid:8}/ --dvid-locked
 
 # per-body annotations -> bodies.parquet  (a SEPARATE destination)
-em-annot bodies \
+neu-mark bodies \
     --src dvid://dvid.example.org/93fdbc:main/labels_annotations \
     --bodies traced_neurons.csv \
     --out body_annotations_{uuid:8}/ --dvid-locked
@@ -111,7 +111,7 @@ cheap, and it takes `x`/`y`/`z` **columns** — which our tables have by name, s
 flip and no chance of one.
 
 ```bash
-em-annot points --src @synapses --bodies traced.csv --out syn/ \
+neu-mark points --src @synapses --bodies traced.csv --out syn/ \
     --rois 'ME(L),ME(R),LO(L),LO(R),AGNG,PGNG,SNP(L),SNP(R)'     # or --rois @neuropils
 ```
 
@@ -164,7 +164,7 @@ one.
 ## Reading the whole instance
 
 ```bash
-em-annot bodies --src @bodies --all --out 'all_bodies_{uuid:8}/' --dvid-locked
+neu-mark bodies --src @bodies --all --out 'all_bodies_{uuid:8}/' --dvid-locked
 ```
 
 This **never calls `/keys`**, which is unreliable at this size — 58,394 keys took 52 s twice
@@ -184,7 +184,7 @@ slowly.
 The same fetches, returning DataFrames and writing nothing:
 
 ```python
-from em_annotation import source, select_bodies, points, body_annotations
+from neu_mark import source, select_bodies, points, body_annotations
 
 src = source("@synapses", locked=True)        # node pinned once
 sel = select_bodies("@counts", min_synapses=10, locked=True)   # body, pre, post, syn
@@ -192,7 +192,7 @@ pts, rels = points(src, sel.head(50))          # bodies: frame, Series, list or 
 ann = body_annotations("@bodies", sel.head(50), locked=True)
 ```
 
-`em_annotation.ops` is the other half — same fetches, but writing tables and a provenance
+`neu_mark.ops` is the other half — same fetches, but writing tables and a provenance
 record to a destination. Both go through the same functions, so what you see in a notebook
 is what a run would write.
 
@@ -203,14 +203,14 @@ in for a full URL. It is a **URL builder, not a fallback**: nothing consults it 
 `@name` is required so a saved command visibly depends on it, and both the CLI and the
 library print what a reference resolved to.
 
-It is found as `em-annotation.toml` in the working directory **or any parent**, so one file at
+It is found as `neu-mark.toml` in the working directory **or any parent**, so one file at
 the workspace root serves every repo and every notebook subdirectory beneath it — the way
-`pyproject.toml` is found. `$EM_ANNOTATION_CONFIG` overrides. There is deliberately **no
+`pyproject.toml` is found. `$NEU_MARK_CONFIG` overrides. There is deliberately **no
 machine-wide location**: a hidden `~/.config` file applies to every shell on the host and is
 the kind of invisible state that makes one command behave differently for two people.
 
 ```toml
-# em-annotation.toml, at the workspace root
+# neu-mark.toml, at the workspace root
 [dvid]
 server = "dvid.example.org"
 uuid   = "93fdbc:main"
@@ -226,7 +226,7 @@ neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AGNG", "PGNG"]
 ```
 
 ```console
-$ em-annot select-bodies --src @counts --min-synapses 400 --out 'sel/{uuid:8}' --dvid-locked
+$ neu-mark select-bodies --src @counts --min-synapses 400 --out 'sel/{uuid:8}' --dvid-locked
 --src @counts  ->  dvid://dvid.example.org/93fdbc:main/synapses_labelsz
 --out sel/{uuid:8}  ->  sel/821d68d2
 ```
@@ -238,7 +238,7 @@ A rules module is dataset content, loaded by path, not part of this package:
 ```python
 # wasp_rules.py
 import re
-from em_annotation import rule
+from neu_mark import rule
 
 KEEP = ["instance", "type"]          # explicit; nothing else reaches a viewer
 
@@ -263,7 +263,7 @@ is checked: a rule that returns two values raises, which catches `re.findall` wh
 Testing one rule, or all of them, on one string:
 
 ```python
-from em_annotation import rules
+from neu_mark import rules
 RS = rules.from_module("wasp_rules.py")
 
 RS["side"].test("Tm2_A2(L)")        # 'L'
@@ -280,11 +280,11 @@ RS.unparsed(bodies, "column")       # what to fix next, ranked by bodies
 ## Inspecting the annotation strings
 
 `instance` is the field that carries the information and it is dirty in bounded ways.
-`em_annotation.explore` is a set of functions for looking at it — DataFrame in, DataFrame
+`neu_mark.explore` is a set of functions for looking at it — DataFrame in, DataFrame
 out, no printing and no I/O, so it is meant for a notebook:
 
 ```python
-from em_annotation import explore as ex
+from neu_mark import explore as ex
 
 ex.instances(bodies)                        # distinct strings -> body counts
 ex.tokens(bodies, drop=r"\((L|R)\)")        # the suffix vocabulary, side removed
@@ -306,6 +306,6 @@ stays visible rather than becoming an error.
 
 ## Layering
 
-Sits above em-volume-tools (`location` for every write, `dvid` for node resolution,
-`ops.provenance` and `ops.naming`) and alongside em-seg-morpho, from which it imports
+Sits above neu-vol (`location` for every write, `dvid` for node resolution,
+`ops.provenance` and `ops.naming`) and alongside neu-morpho, from which it imports
 nothing.

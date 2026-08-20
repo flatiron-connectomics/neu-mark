@@ -1,15 +1,15 @@
 """Fetches that return DataFrames and write nothing. The interactive entry point.
 
-``em_annotation.ops`` is the other half: same fetches, but they write tables and a provenance
-record to a destination. Both call the same functions in :mod:`em_annotation.dvid`, so what
+``neu_mark.ops`` is the other half: same fetches, but they write tables and a provenance
+record to a destination. Both call the same functions in :mod:`neu_mark.dvid`, so what
 you get in a notebook is what a run would write — the difference is only whether it lands on
 disk.
 
 Everything here is re-exported at package top level and imported lazily, so
-``from em_annotation import select_bodies`` works without ``em-annot --help`` paying for
+``from neu_mark import select_bodies`` works without ``neu-mark --help`` paying for
 pandas:
 
-    >>> from em_annotation import source, select_bodies, points, body_annotations
+    >>> from neu_mark import source, select_bodies, points, body_annotations
     >>> src   = source("dvid://dvid.example.org/93fdbc:main/synapses",
     ...               locked=True)
     >>> sel   = select_bodies(src, min_synapses=10)      # DataFrame: body, pre, post, syn
@@ -17,7 +17,7 @@ pandas:
     >>> ann   = body_annotations("@bodies", sel.head(50))
 
 Sources are accepted in four forms, so nothing has to be spelled twice: a ``dvid://`` URL, an
-``@name`` config reference (see :mod:`em_annotation.config`), an already-opened source dict,
+``@name`` config reference (see :mod:`neu_mark.config`), an already-opened source dict,
 or a plain instance name when a config supplies the server and uuid.
 """
 
@@ -38,7 +38,7 @@ _OPENERS = {
 
 def _url(location: str, *, config=None) -> str:
     """Resolve an ``@name`` reference or a bare instance name into a full DVID URL."""
-    from em_volume_tools.dvid import is_url
+    from neu_vol.dvid import is_url
 
     from . import config as _config
 
@@ -52,7 +52,7 @@ def _url(location: str, *, config=None) -> str:
         raise ValueError(
             f"{location!r} is not a dvid:// URL, and no config was found to build one "
             f"from. Either pass the full URL, or create a config — see "
-            f"em_annotation.config for the search path and format.")
+            f"neu_mark.config for the search path and format.")
     return cfg.url(location)
 
 
@@ -72,7 +72,7 @@ def source(location: str | Mapping[str, Any], *, kind: str = "points",
         # cheap (the node resolution is memoized), and it validates the instance type.
         spec = dict(location)
     else:
-        from em_volume_tools.dvid import parse_url
+        from neu_vol.dvid import parse_url
 
         spec = {"backend": "dvid", **parse_url(_url(location, config=config))}
     return _OPENERS[kind](spec, prefer_locked=locked)
@@ -114,7 +114,7 @@ def select_bodies(location="counts", *, min_synapses: int = 10, min_pre: int = 0
                   config=None):
     """Bodies ranked by synapse count. Returns ``body``, ``pre``, ``post``, ``syn``.
 
-    The no-write half of ``em-annot select-bodies``. Same query, same ranked ``labelsz``
+    The no-write half of ``neu-mark select-bodies``. Same query, same ranked ``labelsz``
     index, nothing written.
     """
     src = _as_source(location, "counts", locked, config)
@@ -130,14 +130,14 @@ def points(location, bodies, *, threads: int = _dvid.DEFAULT_THREADS,
 
     With ``connections=True`` returns ``(points, relationships, connections)`` — the
     oriented, de-duplicated ``(tbar, psd)`` pairs. The match rate is not printed here; take
-    it with ``em_annotation.tables.match_rate(connections)``, and remember it is a statement
+    it with ``neu_mark.tables.match_rate(connections)``, and remember it is a statement
     about how much of the connectome ``bodies`` covers.
 
     ``rois`` adds a ``roi`` column to the points frame: which neuropil each synapse is in.
     A list of instance names, or ``"@name"`` for a set from the config. Only the points
     frame gets it — a relationship spans two points that may be in different neuropils, so
     a single column on it would have to pick one, while a join back to ``points`` answers
-    either side. ``em_annotation.tables.body_roi_counts`` aggregates it per body.
+    either side. ``neu_mark.tables.body_roi_counts`` aggregates it per body.
     """
     src = _as_source(location, "points", locked, config)
     result = _dvid.fetch_points(src, body_ids(bodies), threads=threads)
@@ -206,7 +206,7 @@ def synapse_counts(location="counts", bodies=None, *, locked: bool = False, conf
     ids = body_ids(bodies)
     from neuclease.dvid import labelsz
 
-    from em_volume_tools.dvid import address
+    from neu_vol.dvid import address
 
     server, uuid, instance = address(src)
     pre = labelsz.fetch_counts(server, uuid, instance, ids, "PreSyn")

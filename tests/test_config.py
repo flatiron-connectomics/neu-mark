@@ -2,7 +2,7 @@
 
 import pytest
 
-from em_annotation import config
+from neu_mark import config
 
 TOML = """
 [dvid]
@@ -19,7 +19,7 @@ counts = "synapses_labelsz"
 
 @pytest.fixture()
 def cfg(tmp_path, monkeypatch):
-    path = tmp_path / "em-annotation.toml"
+    path = tmp_path / "neu-mark.toml"
     path.write_text(TOML)
     monkeypatch.setenv(config.ENV_VAR, str(path))
     return config.load()
@@ -97,7 +97,7 @@ def test_it_is_found_by_walking_up_from_a_subdirectory(tmp_path, monkeypatch):
     naturally lives, and requiring an exact cwd would make it silently stop being found."""
     monkeypatch.delenv(config.ENV_VAR, raising=False)
     (tmp_path / config.FILENAME).write_text(TOML)
-    deep = tmp_path / "em-annotation" / "notebooks"
+    deep = tmp_path / "neu-mark" / "notebooks"
     deep.mkdir(parents=True)
     monkeypatch.chdir(deep)
     assert config.find() == str(tmp_path / config.FILENAME)

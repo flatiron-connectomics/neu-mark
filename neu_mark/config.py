@@ -14,8 +14,8 @@ way, so a config can never make an export less traceable.
 
 Search order (first hit wins):
 
-1. ``$EM_ANNOTATION_CONFIG``
-2. ``em-annotation.toml`` in the current directory **or any parent** — so one file at the
+1. ``$NEU_MARK_CONFIG``
+2. ``neu-mark.toml`` in the current directory **or any parent** — so one file at the
    workspace root serves every repo and every notebook subdirectory under it, the way
    ``pyproject.toml`` and ``.git`` are found.
 
@@ -29,7 +29,7 @@ directories down from where the file naturally sits, and requiring the cwd to ma
 would mean it silently stopped being found depending on where Jupyter was started.
 
 ```toml
-# em-annotation.toml, at the workspace root
+# neu-mark.toml, at the workspace root
 [dvid]
 server = "dvid.example.org"
 uuid    = "93fdbc:main"      # a branch ref is fine; it is resolved per run
@@ -56,12 +56,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 #: The filename looked for in the cwd and every parent directory. The only place a config is
-#: ever found, other than $EM_ANNOTATION_CONFIG — see the module docstring for why there is
+#: ever found, other than $NEU_MARK_CONFIG — see the module docstring for why there is
 #: no machine-wide location.
-FILENAME = "em-annotation.toml"
+FILENAME = "neu-mark.toml"
 
 #: The environment variable that overrides the search entirely.
-ENV_VAR = "EM_ANNOTATION_CONFIG"
+ENV_VAR = "NEU_MARK_CONFIG"
 
 #: Marks a ``--src`` value as a config lookup rather than a URL. Required, so that a saved
 #: command line visibly says "this depended on my config" instead of looking self-contained.

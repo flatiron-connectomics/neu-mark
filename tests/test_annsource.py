@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from em_annotation import annotations as ann
-from em_annotation import annsource
-from em_volume_tools.location import read_json
+from neu_mark import annotations as ann
+from neu_mark import annsource
+from neu_vol.location import read_json
 
 BOUNDS = ([0, 0, 0], [600, 800, 1000])       # xyz
 
@@ -348,7 +348,7 @@ def test_each_index_is_sharded_for_its_own_size():
 # writing, and reading back through the sharded reader
 # --------------------------------------------------------------------------- #
 def test_a_written_source_reads_back_by_id(tmp_path):
-    from em_volume_tools import sharded
+    from neu_vol import sharded
 
     built = _built(n=150, partial=20)
     dst = str(tmp_path / "syn")
@@ -362,7 +362,7 @@ def test_a_written_source_reads_back_by_id(tmp_path):
 
 
 def test_a_written_relationship_index_reads_back_by_body(tmp_path):
-    from em_volume_tools import sharded
+    from neu_vol import sharded
 
     built = _built(n=150)
     dst = str(tmp_path / "syn")
@@ -373,7 +373,7 @@ def test_a_written_relationship_index_reads_back_by_body(tmp_path):
 
 
 def test_the_info_lands_where_a_viewer_looks(tmp_path):
-    from em_volume_tools.location import read_json
+    from neu_vol.location import read_json
 
     built = _built(n=50)
     dst = str(tmp_path / "syn")
@@ -424,7 +424,7 @@ def test_a_spatial_cell_reads_back_at_the_key_a_viewer_computes(tmp_path):
     then disagrees on nearly every cell of a real multi-axis grid. The key here is recomputed
     from the grid POSITION, the way a reader does it, never from the writer's bookkeeping.
     """
-    from em_volume_tools import sharded
+    from neu_vol import sharded
 
     df = connections(1_500, seed=3)
     dst = _write(tmp_path, df, per_cell=40)
@@ -481,6 +481,6 @@ def test_verify_reports_a_relationship_that_does_not_match(tmp_path):
 
 
 def tables_positions(df, prefix):
-    from em_annotation import tables as _t
+    from neu_mark import tables as _t
 
     return _t.positions_xyz(df, prefix).astype("<i4")

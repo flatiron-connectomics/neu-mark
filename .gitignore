@@ -17,8 +17,8 @@ dist/
 # at any depth.
 /configs/
 
-# Config override for em_annotation.config, carrying a server address and a branch ref.
-em-annotation.toml
+# Config override for neu_mark.config, carrying a server address and a branch ref.
+neu-mark.toml
 
 # Rules modules encode one dataset's label vocabulary, not the package's.
 /rules/

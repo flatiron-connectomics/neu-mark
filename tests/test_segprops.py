@@ -42,8 +42,8 @@ def test_a_missing_type_produces_no_group_tag():
     info = _built()["info"]
     tags = _props(info)["tags"]["tags"]
     assert not [t for t in tags if "na" == t or "<na>" in t or "nan" in t]
-    assert "group-tm2" in tags and "group-ln" in tags
-    assert sum(1 for t in tags if t.startswith("group-")) == 2
+    assert "group:Tm2" in tags and "group:LN" in tags
+    assert sum(1 for t in tags if t.startswith("group:")) == 2
 
 
 def test_group_coverage_matches_the_populated_field():
@@ -94,11 +94,35 @@ def test_tags_have_no_spaces_and_no_leading_hash():
     assert all(" " not in t and not t.startswith("#") for t in tags)
 
 
-def test_tags_are_lowercased_because_matching_is_case_insensitive():
-    """`Traced` and `traced` are the same tag; keeping both would put two
-    indistinguishable chips in the viewer."""
+def test_tag_case_is_preserved():
+    """Cell types are conventionally cased, and folding `Tm2` to `tm2` costs readability
+    in the viewer and in every group-by. The case-insensitive matching that motivated
+    folding is handled by REPORTING collisions instead — see below."""
     tags = _props(_built()["info"])["tags"]["tags"]
-    assert all(t == t.lower() for t in tags)
+    assert any(t != t.lower() for t in tags), tags
+    assert "group:Tm2" in tags
+
+
+def test_facet_tags_use_a_colon_so_a_reader_can_group_on_them():
+    """With a hyphen, `side-l` is indistinguishable from a standalone flag like
+    `fragment`, so every tag becomes its own boolean and no facet can be grouped on.
+    Flags stay bare on purpose: they are not mutually exclusive."""
+    tags = _props(_built()["info"])["tags"]["tags"]
+    faceted = [t for t in tags if ":" in t]
+    assert faceted, tags
+    assert {t.split(":", 1)[0] for t in faceted} <= {"group", "side", "col"}
+    for flag in ("fragment", "truncated", "nucleated", "cervical", "glia"):
+        assert all(":" not in t for t in tags if t == flag)
+
+
+def test_case_only_collisions_are_reported_not_folded():
+    """Two tags differing only in case are ONE chip in the viewer, because matching is
+    case-insensitive. Folding them would be lossy, so they are surfaced instead."""
+    from neu_mark import segprops
+
+    assert segprops.case_collisions(["group:Tm2", "group:TM2", "side:L"]) == {
+        "group:tm2": ["group:Tm2", "group:TM2"]}
+    assert segprops.case_collisions(["group:Tm2", "side:L"]) == {}
 
 
 def test_ids_are_base_ten_strings():
@@ -137,9 +161,9 @@ def test_each_facet_lands_on_the_right_body():
         i = info["inline"]["ids"].index(str(body))
         return {tags["tags"][j] for j in tags["values"][i]}
 
-    assert tags_of(1) == {"group-tm2", "side-l", "col-a2"}
-    assert tags_of(2) == {"side-r", "fragment"}
-    assert tags_of(3) == {"group-ln", "side-l", "col-c5", "nucleated"}
+    assert tags_of(1) == {"group:Tm2", "side:L", "col:A2"}
+    assert tags_of(2) == {"side:R", "fragment"}
+    assert tags_of(3) == {"group:LN", "side:L", "col:C5", "nucleated"}
     assert tags_of(4) == {"cervical"}
 
 
@@ -148,7 +172,7 @@ def test_columns_are_multi_valued():
                           "instance": ["X_D2_E3(L)"]})
     info = segprops.build(frame)["info"]
     tags = _props(info)["tags"]
-    assert {tags["tags"][i] for i in tags["values"][0]} >= {"col-d2", "col-e3"}
+    assert {tags["tags"][i] for i in tags["values"][0]} >= {"col:D2", "col:E3"}
 
 
 def test_noise_is_excluded_entirely_not_merely_untagged():
@@ -176,7 +200,7 @@ def test_a_doubt_mark_normalizes_to_the_plain_completeness_tag():
                           "instance": ["Tm(R)_truncated?"]})
     info = segprops.build(frame)["info"]
     tags = _props(info)["tags"]
-    assert {tags["tags"][i] for i in tags["values"][0]} == {"side-r", "truncated"}
+    assert {tags["tags"][i] for i in tags["values"][0]} == {"side:R", "truncated"}
 
 
 def test_a_like_suffix_stays_in_the_label_and_is_not_tagged():
@@ -186,7 +210,7 @@ def test_a_like_suffix_stays_in_the_label_and_is_not_tagged():
     info = result["info"]
     assert _props(info)["instance"]["values"] == ["DPM-like(L)"]
     tags = _props(info)["tags"]
-    assert {tags["tags"][i] for i in tags["values"][0]} == {"side-l"}
+    assert {tags["tags"][i] for i in tags["values"][0]} == {"side:L"}
 
 
 def test_everything_excluded_is_an_error_not_an_empty_document():

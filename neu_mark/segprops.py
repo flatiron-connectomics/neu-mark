@@ -9,12 +9,17 @@ package.
 - **At most one property of type ``label``**, one ``description``, one ``tags``. Any number
   of ``number`` and ``string``. That single-``tags`` limit is the shape-defining constraint:
   every facet has to pool into one property, which is why tags carry a facet prefix
-  (``side-l``, ``group-mi1``, ``col-c2``) rather than living in separate properties.
+  (``side:L``, ``group:Mi1``, ``col:C2``) rather than living in separate properties.
+  The separator is a **colon**, matching published sources, because it is what lets a
+  reader tell a facet from a standalone flag — with a hyphen every tag becomes its own
+  boolean and no facet can be grouped on.
 - ``tags`` values are **indices into that property's own ``tags`` array, in increasing
   order**. Not strings.
 - A tag must contain **no spaces** and no leading ``#``, and matching is
-  **case-insensitive** — so tags are lowercased and spaces hyphenated here, which also
-  means two values differing only in case would collide and are folded deliberately.
+  **case-insensitive** — so spaces are hyphenated here. Case is **preserved**, because
+  cell types are conventionally cased and folding them costs readability everywhere; the
+  case-insensitive matching means two values differing only in case are one chip in the
+  viewer, which :func:`case_collisions` reports rather than pre-empting.
 - The ``description`` *member* must not appear on a ``tags`` property (it may on the
   others). Note ``description`` is both a member name and a property type; only the member
   is restricted.
@@ -24,7 +29,7 @@ package.
 Because it lets this ship before the ``cell_type`` question is settled. ``instance`` is
 populated on 99.9% of annotated bodies and is the most informative single string available;
 the curated ``type`` field, on only ~5% of the instance and ~13% of synapse-rich bodies,
-goes in as a ``group-`` tag instead of competing to be the name. Nothing here parses a cell
+goes in as a ``group:`` tag instead of competing to be the name. Nothing here parses a cell
 type, so nothing here has to be revisited when that rule lands.
 
 ## Numbers, and one dtype that is not free to choose
@@ -68,10 +73,17 @@ COLUMN = re.compile(r"_([A-Z]{1,2}\d+[a-z]?)(?=$|[_(])")
 
 SIDE = re.compile(r"\((L|R)\)")
 
-#: Facet prefixes. Flags stay bare (`nucleated`, not `flag-nucleated`) because they read
-#: better and cannot be confused with anything; everything with an open vocabulary is
-#: prefixed so the tag list sorts into groups.
-PREFIX = {"group": "group-", "side": "side-", "column": "col-"}
+#: Facet prefixes, ``namespace:value``. **The colon is load-bearing, not cosmetic.** It is
+#: what lets a reader tell a *facet* from a standalone flag and turn `side`, `group` and
+#: `col` into categorical columns; with a hyphen, `side-l` is indistinguishable from
+#: `fragment` and every tag collapses into its own boolean — 483 of them on real data,
+#: with no `groupby` possible on any facet. It also matches the convention published
+#: datasets use (`superclass:ol_intrinsic`), so one reader handles both.
+#:
+#: Flags stay bare (`nucleated`, not `flag:nucleated`) and that is deliberate: they are
+#: not mutually exclusive — a body can be nucleated *and* cervical — so there is no first
+#: value to prefer, and one boolean each is the honest representation.
+PREFIX = {"group": "group:", "side": "side:", "column": "col:"}
 
 #: Shown in the viewer next to the tag, so a reader does not have to guess what `col-` is.
 TAG_DESCRIPTIONS = {
@@ -87,14 +99,18 @@ TAG_DESCRIPTIONS = {
 
 
 def normalize_tag(value: Any) -> str | None:
-    """A tag as the format requires: no spaces, no leading ``#``, lowercase.
+    """A tag as the format requires: no spaces, no leading ``#``. **Case is preserved.**
 
-    Lowercased because matching is case-insensitive, so ``Traced`` and ``traced`` are the
-    same tag and keeping both would put two indistinguishable chips in the viewer.
+    Cell types are conventionally cased (``Tm2``, ``LC10``, ``MBON``) and folding them to
+    ``group:tm2`` costs readability in the viewer and in every group-by, for a collision
+    that is rare and now *detected* rather than pre-empted: neuroglancer matches tags
+    case-insensitively, so two values differing only in case would be one chip, and
+    :func:`case_collisions` reports any before they are written. Published sources
+    preserve case for the same reason.
 
     Missingness goes through :func:`neu_mark.explore.normalize`, which is the one place
     that knows ``pd.NA`` is neither ``None`` nor a float. Testing it by hand here is how
-    16,606 bodies acquired a tag reading ``group-<na>``: ``pd.NA is not None`` is True and
+    16,606 bodies acquired a tag reading ``group:<na>``: ``pd.NA is not None`` is True and
     ``str(pd.NA)`` is the *truthy* string ``"<NA>"``.
     """
     from .explore import normalize
@@ -105,7 +121,21 @@ def normalize_tag(value: Any) -> str | None:
     text = text.lstrip("#").strip()
     if not text:
         return None
-    return re.sub(r"\s+", "-", text).lower()
+    return re.sub(r"\s+", "-", text)
+
+
+def case_collisions(vocabulary: Iterable[str]) -> dict[str, list[str]]:
+    """``{lowercased: [tags]}`` for tags that differ only in case.
+
+    Such tags are ONE chip in the viewer, because matching is case-insensitive — so a
+    body carrying ``group:Tm2`` and another carrying ``group:TM2`` are indistinguishable
+    there while remaining two values in the table. Reported rather than folded: folding
+    is lossy and the collision is rare, so it is better to know which values did it.
+    """
+    seen: dict[str, list[str]] = {}
+    for tag in vocabulary:
+        seen.setdefault(tag.lower(), []).append(tag)
+    return {low: tags for low, tags in seen.items() if len(tags) > 1}
 
 
 def _tokens(instance: str | None) -> list[str]:
@@ -228,11 +258,18 @@ def build(bodies, *, counts=None, sizes=None, keep_glia: bool = True) -> dict[st
     numbers = _number_properties(ids, counts=counts, sizes=sizes)
     properties.extend(numbers)
 
+    collisions = case_collisions(vocabulary)
+    if collisions:
+        logger.warning(
+            "%d tag(s) differ only in case and will be ONE chip in the viewer: %s",
+            len(collisions), sorted(v for vs in collisions.values() for v in vs)[:10])
+
     info = {"@type": AT_TYPE, "inline": {"ids": ids, "properties": properties}}
     report = {
         "bodies": len(ids),
         "excluded": excluded,
         "tags": len(vocabulary),
+        "case_collisions": {low: tags for low, tags in sorted(collisions.items())},
         "coverage": {facet: {"bodies": n, "fraction": n / len(ids)}
                      for facet, n in sorted(coverage.items())},
         "numbers": [p["id"] for p in numbers],

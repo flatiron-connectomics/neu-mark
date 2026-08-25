@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "layer shows each body's name, its tags and its synapse counts.\n\n"
                     "`label` is the raw `instance` string — which is what lets this run "
                     "before a cell-type parse is settled. Tags carry a facet prefix "
-                    "(group-, side-, col-) because the format allows only ONE tags "
+                    "(group:, side:, col:) because the format allows only ONE tags "
                     "property, so every facet has to pool into it.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     q.add_argument("--src", required=True, metavar="URL",

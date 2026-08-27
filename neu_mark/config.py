@@ -28,30 +28,30 @@ The upward walk is what makes a config in the tree usable: notebooks live a coup
 directories down from where the file naturally sits, and requiring the cwd to match exactly
 would mean it silently stopped being found depending on where Jupyter was started.
 
-```toml
-# neu-mark.toml, at the workspace root
-[dvid]
-server = "dvid.example.org"
-uuid    = "93fdbc:main"      # a branch ref is fine; it is resolved per run
-locked  = true               # prefer the newest locked node
+.. code-block:: toml
 
-[instances]
-synapses = "synapses"
-bodies   = "labels_annotations"
-labels   = "labels"
-counts   = "synapses_labelsz"
-todo     = "labels_todo"
+   # neu-mark.toml, at the workspace root
+   [dvid]
+   server = "dvid.example.org"
+   uuid    = "93fdbc:main"      # a branch ref is fine; it is resolved per run
+   locked  = true               # prefer the newest locked node
 
-# Named ROI lists, for `--rois @neuropils`. The set must be a chosen, non-overlapping
-# partition — see `dvid.label_point_rois` for why there is no "all".
-[roi_sets]
-neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AL(L)", "LH(L)", "LH(R)"]
+   [instances]
+   synapses = "synapses"
+   bodies   = "labels_annotations"
+   labels   = "labels"
+   counts   = "synapses_labelsz"
+   todo     = "labels_todo"
 
-# Named rules modules, for `--rules @wasp`. A path, relative to this file — so the
-# reference means the same thing from any directory the config is found from.
-[rule_sets]
-wasp = "rules/wasp_rules.py"
-```
+   # Named ROI lists, for `--rois @neuropils`. The set must be a chosen, non-overlapping
+   # partition — see `dvid.label_point_rois` for why there is no "all".
+   [roi_sets]
+   neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AL(L)", "LH(L)", "LH(R)"]
+
+   # Named rules modules, for `--rules @wasp`. A path, relative to this file — so the
+   # reference means the same thing from any directory the config is found from.
+   [rule_sets]
+   wasp = "rules/wasp_rules.py"
 """
 
 from __future__ import annotations

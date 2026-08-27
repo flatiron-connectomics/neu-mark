@@ -152,7 +152,7 @@ def near(token_frame: pd.DataFrame, target: str, *, cutoff: float = 0.72,
 
     The mechanism for the "catch the misspellings" problem. Fuzzy rather than exact
     because the real variants are unguessable in advance — on our dataset this surfaces
-    ``truncated?`` (8 bodies) and a trailing-space ``truncated `` (3) that a controlled
+    ``truncated?`` (8 bodies) and a ``truncated`` carrying a trailing space (3) that a controlled
     vocabulary would otherwise silently treat as unknown tokens.
     """
     rows = []

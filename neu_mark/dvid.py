@@ -508,10 +508,10 @@ def key_ranges(boundaries: Sequence[str] = DEFAULT_KEY_BOUNDARIES
     """Consecutive pairs of ``boundaries`` as ``(key1, key2)`` request bounds.
 
     **DVID's key range is INCLUSIVE at both ends**, not half-open — its own documentation
-    calls ``key2`` the "maximal key" and notes that ``'a'``..``'z'`` catches a single ``'z'``.
-    So consecutive ranges built this way *overlap by exactly one key* wherever a key equals a
-    boundary, and a body literally numbered ``3`` comes back from both ``'2'``..``'3'`` and
-    ``'3'``..``'4'``.
+    calls ``key2`` the "maximal key" and notes that a range from ``'a'`` to ``'z'`` catches
+    a single ``'z'``. So consecutive ranges built this way *overlap by exactly one key*
+    wherever a key equals a boundary, and a body literally numbered ``3`` comes back from
+    both the ``'2'``-to-``'3'`` range and the ``'3'``-to-``'4'`` one.
 
     That is harmless for completeness — an overlapping cover misses nothing, and collecting
     into a dict de-duplicates — but it does mean **summing the per-range counts overcounts**.

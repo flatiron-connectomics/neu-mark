@@ -10,7 +10,7 @@ rule here, matching things like ``_A2`` and ``_C5``; it was removed because ther
 generically correct column parser — the same pattern that finds a real optic-lobe column
 also swallows part of a cell type, and which is which is a fact about the dataset, not
 about the string. That knowledge belongs in a rules module next to the body lists. The
-seam it left is the whole reason plugins exist:
+seam it left is the whole reason plugins exist::
 
     # wasp_rules.py
     from neu_mark import rule

@@ -14,6 +14,10 @@ locked = true
 synapses = "synapses"
 bodies = "labels_annotations"
 counts = "synapses_labelsz"
+
+[rule_sets]
+wasp = "rules/wasp_rules.py"
+absolute = "/opt/shared/rules.py"
 """
 
 
@@ -129,6 +133,26 @@ def test_find_accepts_an_explicit_starting_point(tmp_path, monkeypatch):
     deep = tmp_path / "a" / "b"
     deep.mkdir(parents=True)
     assert config.find(deep) == str(tmp_path / config.FILENAME)
+
+
+def test_a_named_rules_module_resolves_against_the_CONFIG_not_the_cwd(cfg, tmp_path,
+                                                                     monkeypatch):
+    """A notebook two directories down and a shell at the workspace root must load the same
+    module. Resolved against the cwd, the same command loads different rules depending on
+    where it was run — which is precisely the invisible state this file exists to avoid."""
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    assert cfg.rule_set("wasp") == str(tmp_path / "rules" / "wasp_rules.py")
+
+
+def test_an_absolute_rules_path_is_left_alone(cfg):
+    assert cfg.rule_set("absolute") == "/opt/shared/rules.py"
+
+
+def test_an_unknown_rules_name_lists_what_is_configured(cfg):
+    with pytest.raises(ValueError, match="absolute, wasp"):
+        cfg.rule_set("nope")
 
 
 def test_load_accepts_an_explicit_path(tmp_path):

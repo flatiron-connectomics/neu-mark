@@ -23,6 +23,10 @@ neu-mark.toml
 # Rules modules encode one dataset's label vocabulary, not the package's.
 /rules/
 *_rules.py
+# ...except the package's OWN builtin rules, which this pattern would otherwise silently
+# leave out of every commit — a module missing from the release, with nothing to show for it
+# in `git status`. Anything under neu_mark/ is package code, never dataset content.
+!neu_mark/*_rules.py
 
 # Notebooks are working material. Add one deliberately with `git add -f` to release it.
 notebooks/

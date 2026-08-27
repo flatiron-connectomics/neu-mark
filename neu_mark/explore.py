@@ -20,7 +20,8 @@ as a trailing token. A vocabulary decision should be weighted by how much data i
 
 ## The rule contract these functions assume
 
-A rule is any callable taking one row and returning:
+Everything here that takes ``rules`` wants a ``{name: callable}`` mapping, where each
+callable takes one row and returns:
 
 - a scalar (``"L"``, ``7``, ``True``) — one value for that body,
 - a **sequence** — several values, for facets that are genuinely multi-valued: a central
@@ -29,8 +30,18 @@ A rule is any callable taking one row and returning:
   segment,
 - ``None`` or an empty sequence — did not fire, which is not an error and must stay visible.
 
-That is deliberately looser than a decorator so these functions are useful before any rule
-framework exists: a plain ``dict`` of ``{name: function}`` works today.
+**This is the loose form on purpose.** A plain ``dict`` of functions works, so these
+functions are useful before anything is declared — which is the point, since you are here
+to find out what the rules should be. :mod:`neu_mark.rules` is the same contract with the
+declarations added (``needs``, ``multi``, ``prefix``, ``drop``, a docstring), and a
+:class:`~neu_mark.rules.RuleSet` is what anything that *writes* a source requires. Since a
+``Rule`` is itself a callable, every function here accepts either; ``RuleSet.as_mapping()``
+is the bridge, and :meth:`~neu_mark.rules.RuleSet.coverage` and
+:meth:`~neu_mark.rules.RuleSet.unparsed` are thin wrappers over :func:`coverage` and
+:func:`unparsed` that pass it for you and merge in what each rule declared.
+
+So: ``ex.coverage(bodies, {"side": my_function})`` while you are still guessing, and
+``ruleset.coverage(bodies)`` once the guesses have become a module.
 """
 
 from __future__ import annotations
@@ -63,6 +74,16 @@ def normalize(value: Any) -> str | None:
         return None
     text = _DOUBT.sub("", str(value).strip()).strip()
     return text or None
+
+
+def split_tokens(value: Any) -> list[str]:
+    """One string's tokens, normalized. The row-level counterpart of :func:`tokens`.
+
+    Public because it is what a rule body wants: ``"LN_C5(L)_NCL"`` -> ``['LN', 'C5', 'L',
+    'NCL']``, with ``pd.NA`` and ``None`` yielding ``[]`` rather than ``['<NA>']``. Writing
+    the split by hand in each rule is how the two spellings of "separator" drift apart.
+    """
+    return [t for t in _SPLIT.split(normalize(value) or "") if t]
 
 
 def _series(frame: pd.DataFrame, column: str) -> pd.Series:

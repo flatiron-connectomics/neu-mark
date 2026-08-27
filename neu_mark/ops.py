@@ -229,7 +229,10 @@ def segment_properties(bodies_source: Mapping[str, Any], dst: str,
                        bodies: Sequence[int], *,
                        counts_source: Mapping[str, Any] | None = None,
                        labelmap_source: Mapping[str, Any] | None = None,
-                       keep_glia: bool = True, link: bool = True) -> dict[str, Any]:
+                       rules_path: str | None = None, rules_only: bool = False,
+                       max_tags: float | None = None,
+                       keep_glia: bool = True, link: bool = True,
+                       dry_run: bool = False) -> dict[str, Any]:
     """Build a ``segment_properties`` source and, by default, link the volume to it.
 
     ``dst`` is the **segmentation volume**: the document lands at
@@ -239,11 +242,26 @@ def segment_properties(bodies_source: Mapping[str, Any], dst: str,
     layer — ``link=False`` writes the source without touching the published volume, which
     is the right way to look at it first.
 
+    ``rules_path`` loads a rules module whose rules **override the builtins by name**
+    (``rules_only`` uses it alone). ``dry_run`` builds and reports without writing
+    anything: a rule that fires on 2% of bodies is worth seeing before it reaches a
+    published volume, and ``link=False`` is not enough — that still writes the document.
+
     ``counts_source`` (a labelsz instance) adds ``pre``/``post``/``syn``; ``labelmap_source``
     adds ``voxels``. Both are optional and both are cheap — measured ~5.6 s per 2,000 bodies
     for sizes, so ~1 minute for a 20k list.
     """
     from . import segprops
+
+    ruleset = None
+    rules_record = None
+    if rules_path:
+        from . import rules as _rules
+
+        ruleset = _rules.from_module(rules_path)
+        logger.info("loaded %d rule(s) from %s: %s", len(ruleset), rules_path,
+                    ", ".join(ruleset.names))
+        rules_record = _rules.provenance(ruleset)
 
     frame = _dvid.fetch_body_annotations(bodies_source, bodies)["bodies"]
     logger.info("%d of %d bodies have a property record", len(frame), len(bodies))
@@ -255,7 +273,14 @@ def segment_properties(bodies_source: Mapping[str, Any], dst: str,
     if labelmap_source is not None:
         sizes = _dvid.fetch_voxel_counts(labelmap_source, bodies)
 
-    built = segprops.build(frame, counts=counts, sizes=sizes, keep_glia=keep_glia)
+    extra = {} if max_tags is None else {"max_tags": float(max_tags)}
+    built = segprops.build(frame, rules=ruleset, rules_only=rules_only, counts=counts,
+                           sizes=sizes, keep_glia=keep_glia, **extra)
+
+    if dry_run:
+        logger.info("dry run: nothing written to %s", str(dst).rstrip("/"))
+        return {**built, "written": [], "linked": None, "record": None, "dry_run": True}
+
     written = [segprops.write(dst, built["info"])]
 
     linked = None
@@ -267,13 +292,21 @@ def segment_properties(bodies_source: Mapping[str, Any], dst: str,
 
     run = {"bodies_requested": len(bodies), "bodies_with_records": int(len(frame)),
            "segments": built["report"]["bodies"], "excluded": built["report"]["excluded"],
-           "tags": built["report"]["tags"], "coverage": built["report"]["coverage"],
+           "tags": built["report"]["tags"], "tag_limit": built["report"]["tag_limit"],
+           "max_tags": built["report"]["max_tags"],
+           "facets": built["report"]["facets"], "bytes": built["report"]["bytes"],
+           "coverage": built["report"]["coverage"],
            "numbers": built["report"]["numbers"], "keep_glia": keep_glia,
+           # The rules decide what this source SAYS, so without them the record cannot
+           # answer "what produced this" — see `rules.provenance` for why a hash is not
+           # enough on its own.
+           "rules": rules_record, "rules_only": bool(rules_only),
            "linked": linked}
     record = _record(bodies_source, dst, run=run)
     _io.write_provenance(dst, record, name=f"{segprops.SUBDIR}/provenance")
 
-    return {**built, "written": written, "linked": linked, "record": record}
+    return {**built, "written": written, "linked": linked, "record": record,
+            "dry_run": False}
 
 
 def fetch_bodies(source: Mapping[str, Any], dst: str,

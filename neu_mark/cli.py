@@ -171,8 +171,13 @@ def build_parser() -> argparse.ArgumentParser:
                     "layer shows each body's name, its tags and its synapse counts.\n\n"
                     "`label` is the raw `instance` string — which is what lets this run "
                     "before a cell-type parse is settled. Tags carry a facet prefix "
-                    "(group:, side:, col:) because the format allows only ONE tags "
-                    "property, so every facet has to pool into it.",
+                    "(group:, side:) because the format allows only ONE tags "
+                    "property, so every facet has to pool into it.\n\n"
+                    "Facets come from rules. The built-in set covers side, curated type "
+                    "and the flags; --rules loads a module of your own whose rules "
+                    "override the builtins by name, which is where anything "
+                    "dataset-specific belongs — optic lobe column, glomerulus, cell type. "
+                    "Run --dry-run first to see what each rule fired on.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     q.add_argument("--src", required=True, metavar="URL",
                    help=_SRC_HELP + "For this command INSTANCE is the keyvalue instance "
@@ -193,6 +198,24 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--labelmap", metavar="URL", default=None,
                    help="a labelmap instance to add a `voxels` number property, from "
                         "DVID's own /sizes. ~1 minute for 20k bodies.")
+    q.add_argument("--rules", metavar="PATH", default=None,
+                   help="a Python module of @rule functions, or @name for one configured "
+                        "under [rule_sets]. Its rules override the built-in ones of the "
+                        "same name and any others are added, so a module adding one "
+                        "glomerulus rule need not redeclare the rest.")
+    q.add_argument("--rules-only", action="store_true",
+                   help="use only the module's rules, dropping the built-in ones. For a "
+                        "dataset whose annotation strings share nothing with these.")
+    q.add_argument("--max-tags", metavar="N", type=float, default=None,
+                   help="cap the tag vocabulary. Below 1 this is a fraction of the segments "
+                        "written (the default is 0.10, floored at 100 tags so short lists "
+                        "are not judged by a ratio); 1 or above is an absolute count, "
+                        "respected as given. A rule echoing whole instance strings back "
+                        "produces a valid document no viewer can use; raise this when a "
+                        "dataset genuinely has that many distinct types.")
+    q.add_argument("--dry-run", action="store_true",
+                   help="build and report without writing anything. --no-link still writes "
+                        "the document; this writes nothing at all.")
     q.add_argument("--drop-glia", action="store_true",
                    help="exclude glia-labelled bodies. By default they are KEPT and carry "
                         "a `glia` tag — not connectome-relevant, but worth seeing.")
@@ -355,6 +378,24 @@ def _roi_list(value: str | None) -> list[str] | None:
     return resolved
 
 
+def _rules_path(value: str | None) -> str | None:
+    """``--rules`` as a path: a filename, or an ``@name`` from ``[rule_sets]``.
+
+    Prints what an ``@name`` resolved to, for the same reason ``--src @counts`` does: a
+    saved command must not look self-contained when it depended on someone's config.
+    """
+    from . import config as _config
+
+    if not value:
+        return None
+    if not value.startswith(_config.REFERENCE_PREFIX):
+        return value
+    cfg = _config.load()
+    resolved = cfg.rule_set(value[len(_config.REFERENCE_PREFIX):])
+    print(f"--rules {value}  ->  {resolved}")
+    return resolved
+
+
 def _report_rois(stats: dict | None) -> None:
     """How many synapses landed in a neuropil. A large unlabelled share means the wrong set."""
     if not stats:
@@ -490,10 +531,16 @@ def cmd_segment_properties(args) -> int:
 
     result = ops.segment_properties(
         bodies_src, dst, ids, counts_source=counts_src, labelmap_source=labelmap_src,
-        keep_glia=not args.drop_glia, link=bool(args.link))
+        rules_path=_rules_path(args.rules), rules_only=bool(args.rules_only),
+        max_tags=args.max_tags,
+        keep_glia=not args.drop_glia, link=bool(args.link),
+        dry_run=bool(args.dry_run))
 
     for line in segprops.format_report(result["report"]):
         print(line)
+    if result.get("dry_run"):
+        print(f"DRY RUN — nothing written. {dst} is untouched.")
+        return 0
     print(f"wrote {', '.join(result['written'])} to {dst}")
     if result["linked"]:
         print(f"linked into {dst}/info: {result['linked']}")

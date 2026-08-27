@@ -231,52 +231,6 @@ $ neu-mark select-bodies --src @counts --min-synapses 400 --out 'sel/{uuid:8}' -
 --out sel/{uuid:8}  ->  sel/821d68d2
 ```
 
-## Writing rules
-
-A rules module is dataset content, loaded by path, not part of this package:
-
-```python
-# wasp_rules.py
-import re
-from neu_mark import rule
-
-KEEP = ["instance", "type"]          # explicit; nothing else reaches a viewer
-
-@rule
-def side(r):
-    """Hemisphere, from the parenthesized (L)/(R)."""
-    m = re.search(r"\((L|R)\)", str(r["instance"] or ""))
-    return m.group(1) if m else None
-
-@rule(multi=True)
-def column(r):
-    """Column labels; genuinely multi-valued."""
-    return re.findall(r"_([A-Z]\d+)(?=$|[_(])", str(r["instance"] or ""))
-```
-
-A rule takes one row and returns a scalar, a **sequence** (for multi-valued facets), or
-`None` for "did not fire". `needs` declares the columns it reads, so a missing one is an
-error naming the rule rather than an `AttributeError` mid-apply. `multi=False` (the default)
-is checked: a rule that returns two values raises, which catches `re.findall` where
-`re.search` was meant.
-
-Testing one rule, or all of them, on one string:
-
-```python
-from neu_mark import rules
-RS = rules.from_module("wasp_rules.py")
-
-RS["side"].test("Tm2_A2(L)")        # 'L'
-RS["side"].test("AGNG")             # None
-RS.explain("LN_C5(L)_NCL")          # {'side': 'L', 'column': ('C5',), ...}
-
-RS.coverage(bodies)                 # per rule: fired, coverage, distinct, multi, top
-RS.unparsed(bodies, "column")       # what to fix next, ranked by bodies
-```
-
-`test` and `explain` build a synthetic row through the real path, so missing fields arrive as
-`None` rather than `pd.NA` — the difference that makes `r["instance"] or ""` work.
-
 ## Inspecting the annotation strings
 
 `instance` is the field that carries the information and it is dirty in bounded ways.
@@ -290,19 +244,163 @@ ex.instances(bodies)                        # distinct strings -> body counts
 ex.tokens(bodies, drop=r"\((L|R)\)")        # the suffix vocabulary, side removed
 ex.variants(bodies)                         # what normalization repaired ('truncated?')
 ex.near(ex.tokens(bodies), "fragment")      # fuzzy candidates for misspellings
-ex.coverage(bodies, rules)                  # per-rule: fired, coverage, distinct, top
-ex.unparsed(bodies, rules, "cell_type")     # what to fix next, ranked by bodies
-ex.compare(bodies, "type", rule)            # curated field vs a parse, row by row
 ```
-
-A **rule** is any callable taking one row (a Series, with missing values as `None`) and
-returning a scalar, a **sequence** for genuinely multi-valued facets — column labels are,
-since some central complex neurons innervate several — or `None` for "did not fire", which
-stays visible rather than becoming an error.
 
 `near` and `variants` catch different things and you want both: whitespace and a trailing
 `?` are repaired by `normalize`, so `truncated?` never appears in the token histogram and
 `near` finds nothing left to fix. `variants` is what shows you the repair happened.
+
+Once you have a guess about the vocabulary, try it out. Here a **rule** is nothing more
+than a function of one row, and `rules` is a plain dict of them:
+
+```python
+guesses = {"cell_type": lambda r: (r["instance"] or "").split("_")[0] or None}
+
+ex.apply_rules(bodies, guesses)                  # one column per rule
+ex.coverage(bodies, guesses)                     # bodies, coverage, distinct, top
+ex.unparsed(bodies, guesses, "cell_type")        # what it missed, ranked by bodies
+ex.compare(bodies, "type", guesses["cell_type"]) # curated field vs your parse, row by row
+```
+
+A rule takes one row (a Series, with missing values as `None`) and returns a scalar, a
+**sequence** for genuinely multi-valued facets — column labels are, since some central
+complex neurons innervate several — or `None` for "did not fire", which stays visible
+rather than becoming an error.
+
+## Writing rules
+
+A dict of lambdas is right for the first five minutes and wrong for anything you publish
+from. `neu_mark.rules` is the same contract with the declarations added, and a
+dataset-specific `RuleSet` is loaded by path from a module living with the dataset:
+
+```python
+# wasp_rules.py
+import re
+from neu_mark import explore as ex, rule
+
+KEEP = ["instance", "type"]          # explicit; nothing else reaches a viewer
+
+@rule
+def side(r):
+    """Hemisphere, from the parenthesized (L)/(R)."""
+    m = re.search(r"\((L|R)\)", str(r["instance"] or ""))
+    return m.group(1) if m else None
+
+@rule(multi=True)
+def column(r):
+    """Column labels; genuinely multi-valued."""
+    return re.findall(r"_([A-Z]\d+)(?=$|[_(])", str(r["instance"] or ""))
+
+@rule(drop=True)                     # `noise` is a builtin, so this REPLACES its
+def noise(r):                        # vocabulary rather than adding to it — name it
+    """Bodies this dataset marks as not real data."""   # something else to have both
+    tokens = {t.lower() for t in ex.split_tokens(r["instance"])}
+    return next((t for t in ("irrelevant", "block") if t in tokens), None)
+```
+
+```python
+from neu_mark import rules
+RS = rules.from_module("wasp_rules.py")
+```
+
+What a declaration buys you, beyond the bare function:
+
+| | |
+|---|---|
+| `needs` | the columns it reads, checked up front — a missing one is an error naming the rule, not an `AttributeError` 8,000 rows in |
+| `multi` | checked, not decorative: a single-valued rule returning two values raises, which catches `re.findall` where `re.search` was meant |
+| `prefix` | the facet namespace, defaulting to the rule's name — `glomerulus` gives `glomerulus:VA1v` with nothing declared. `prefix=""` mints a bare tag, right for a flag. The colon is added for you |
+| `drop` | the rule **excludes** the body it fires on and returns the reason, which is counted in the report |
+| `consumes` | which tokens of the instance this rule accounts for, so `RuleSet.remainder` can hand you what no rule recognized. Derived from the returned values by default — declare it only where a rule normalizes an alias (`NCL` → `nucleated`) |
+| `tag=False` | produces something other than a tag. `label` and `description` are reserved and set those properties; anything else is computed and reported but emits nothing |
+| the docstring | becomes the description — in the coverage report, and on every tag the rule mints, so the viewer explains itself |
+
+Testing one rule, or all of them, on one string:
+
+```python
+RS["side"].test("Tm2_A2(L)")        # 'L'
+RS["side"].test("AGNG")             # None — did not fire
+RS.explain("LN_C5(L)_NCL")          # {'side': 'L', 'column': ('C5',), ...}
+
+print(RS)                           # each rule's repr: declarations, then what it is for
+RS.describe()                       # the same as a frame, to sort or filter
+RS.coverage(bodies)                 # what they did to your data, plus what they declare
+RS.unparsed(bodies, "column")       # what to fix next, ranked by bodies
+```
+
+`test` and `explain` build a synthetic row through the real path, so missing fields arrive as
+`None` rather than `pd.NA` — the difference that makes `r["instance"] or ""` work.
+
+### What no rule recognized
+
+```python
+RS.remainder("LN_C5(L)_NCL")     # 'LN'
+RS.consumed("LN_C5(L)_NCL")      # {'side': ('L',), 'nucleated': ('NCL',), 'column': ('C5',)}
+```
+
+`remainder` strips every token the rules accounted for and rejoins the rest, which collapses
+runs of separators and strips them from the margins. It is the raw material for a cell-type
+parse that does **not** carry its own copy of every vocabulary the rules already encode —
+the failure mode being that you add a flag to a rule, forget to add it to the parser, and
+the flag starts appearing inside cell-type names.
+
+Removal is token-granular rather than substring-based, because `side` returns `"L"` and
+deleting that substring from `LC10_C5(L)` would eat the `L` of `LC10`. Rules whose value
+*is* the matched token need no `consumes`; only the alias-normalizing ones do.
+
+Be aware what comes back is a **residue, not a cell type**: on this dataset roughly three
+quarters of non-empty remainders are a bare neuropil name (`AGNG`, `VLNP`) — a body nobody
+has identified — so making a facet out of one needs a vocabulary that can tell those apart.
+
+## Publishing rules as segment properties
+
+`segment-properties` runs a built-in set of rules — side, the curated `type`, and the
+flags. Your module's rules **override the built-in ones by name** and any others are added,
+so adding one glomerulus rule does not mean restating the rest; `--rules-only` uses yours
+alone. There is deliberately no built-in column or cell-type parse: the pattern that finds
+`_A2` also eats part of a cell type, and which is which is a fact about your dataset.
+
+```console
+$ neu-mark segment-properties --src @bodies --dst ./seg --bodies sel/bodies.csv \
+      --rules wasp_rules.py --dry-run
+segments: 21116   tags: …   of 2111 allowed   document: … KiB
+rules: wasp_rules.py
+excluded: 394 — block (7), chunk (4), irrelevant (380), unknown (3)
+  noise             394 bodies (  1.8%)      4 distinct   [drop]
+  side            16238 bodies ( 76.9%)      2 distinct
+  fragment         7109 bodies ( 33.8%)      1 distinct
+  truncated        6625 bodies ( 31.5%)      1 distinct
+  column               …                                          <- yours
+DRY RUN — nothing written. ./seg is untouched.
+```
+
+(Counts are from the ≥10-synapse body list; the elided ones depend on your rules.)
+
+Run `--dry-run` first: it builds and reports without writing anything, which `--no-link`
+does not — that still writes the document. A rule that fires on 2% of bodies looks exactly
+like a facet the data does not have, and only the coverage number tells them apart.
+
+Two guards, because a bad rule produces a *valid* source that no viewer can use.
+
+`--max-tags` caps the vocabulary and takes either form: **below 1 it is a fraction of the
+segments written, 1 or above an absolute count.** The default is `0.10`, because the honest
+size is dataset-dependent — 11,752 distinct `type` values over ~165k male-CNS bodies is 7%
+and entirely reasonable, while the same number over 21k bodies means a rule is handing back
+the instance string. The error names the rule with the most distinct values.
+
+The branch is chosen by value, never by whether you wrote a decimal point: `1` and `1.0` are
+the same number to TOML and to JSON, so a setting meaning "all of them" would come back from
+a config meaning "one tag". A converted fraction is floored at 100 tags so a short list is
+not judged by a ratio; an explicit count is a statement and is respected as given, floor or
+no floor.
+
+Distinct facets are capped separately, which catches the other failure: tags that are each
+their own field can be a small vocabulary and still leave nothing to group on.
+
+Because the rules now decide what the source says, the provenance sidecar records them —
+the resolved path, a sha256, git details if the module happens to be in a work tree, and
+**the module source verbatim**. A hash lets you verify a file you already have; the text is
+what answers "what produced this" when nobody can find the module a month later.
 
 ## Layering
 

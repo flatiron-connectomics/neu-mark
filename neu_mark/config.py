@@ -46,6 +46,11 @@ todo     = "labels_todo"
 # partition — see `dvid.label_point_rois` for why there is no "all".
 [roi_sets]
 neuropils = ["ME(L)", "ME(R)", "LO(L)", "LO(R)", "AL(L)", "LH(L)", "LH(R)"]
+
+# Named rules modules, for `--rules @wasp`. A path, relative to this file — so the
+# reference means the same thing from any directory the config is found from.
+[rule_sets]
+wasp = "rules/wasp_rules.py"
 ```
 """
 
@@ -84,6 +89,27 @@ class Config:
         #: long, so naming one is the difference between a usable command and a paragraph.
         self.roi_sets = {k: list(v) for k, v in
                          (self._data.get("roi_sets") or {}).items()}
+        #: Named rules modules. Same argument as `roi_sets`: the thing being named is a
+        #: path nobody wants to retype, and `@name` keeps the dependency visible.
+        self.rule_sets = {k: str(v) for k, v in
+                          (self._data.get("rule_sets") or {}).items()}
+
+    def rule_set(self, name: str) -> str:
+        """The path of a named rules module from ``[rule_sets]``.
+
+        Resolved **relative to the config file**, not the working directory, so a notebook
+        two directories down and a shell at the workspace root get the same module. A
+        relative path interpreted against the cwd is how the same command loads different
+        rules depending on where it was run.
+        """
+        if name not in self.rule_sets:
+            known = ", ".join(sorted(self.rule_sets)) or "(none configured)"
+            raise ValueError(
+                f"no rules module named {name!r} in {self._where()}. Configured: {known}.")
+        path = Path(self.rule_sets[name]).expanduser()
+        if not path.is_absolute() and self.path:
+            path = Path(self.path).parent / path
+        return str(path)
 
     def roi_set(self, name: str) -> list[str]:
         """A named ROI list from ``[roi_sets]``."""

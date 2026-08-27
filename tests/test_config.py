@@ -68,11 +68,22 @@ def test_an_empty_reference_is_refused(cfg):
 
 
 def test_no_config_loads_empty_rather_than_raising(tmp_path, monkeypatch):
-    """Importing this package must never depend on a file existing."""
+    """Importing this package must never depend on a file existing.
+
+    **The `chdir` is the test.** Without it `load()` walks up from wherever pytest was
+    started and finds the developer's own `neu-mark.toml`, so this asserted nothing on any
+    machine that has one — the previous version papered over that by substituting an empty
+    config when a real one turned up, which made it pass by construction. It then failed for
+    real the day that file had a typo in it: a test about the *absence* of a config, coupled
+    to the contents of a gitignored file that CI does not have.
+    """
     monkeypatch.delenv(config.ENV_VAR, raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert config.find() is None, "tmp_path is not isolated; the walk found a real config"
+
     empty = config.load()
-    empty = config.Config({}, None) if empty.path else empty
     assert empty.path is None and empty.server is None
+    assert empty.instances == {} and empty.roi_sets == {} and empty.rule_sets == {}
 
 
 def test_asking_an_empty_config_for_a_url_says_where_it_looked():

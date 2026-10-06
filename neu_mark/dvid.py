@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 # Imported as a MODULE, and every call below goes through it. A `from ... import name`
 # creates a second binding, so patching `neu_vol.dvid.instance_info` would leave
@@ -316,53 +316,8 @@ def fetch_synapse_counts(source: Mapping[str, Any], *, min_total: int = 10,
 #: in our tables, because "in no ROI" is missing data, not a region called `<unspecified>`.
 ROI_UNSPECIFIED = "<unspecified>"
 
-ROI_INSTANCE = "roi"
-
-
-def available_rois(source: Mapping[str, Any]) -> list[str]:
-    """Every ``roi`` instance on this node."""
-    try:
-        from neuclease.dvid import fetch_repo_info
-    except ImportError as exc:
-        raise ImportError(MISSING) from exc
-
-    server, uuid, _instance = _vdvid.address(source)
-    repo = fetch_repo_info(server, uuid)
-    return sorted(name for name, d in (repo.get("DataInstances") or {}).items()
-                  if d.get("Base", {}).get("TypeName") == ROI_INSTANCE)
-
-
-def resolve_roi_set(source: Mapping[str, Any], rois: Sequence[str]) -> list[str]:
-    """Validate an ROI name list against the node, before anything expensive happens.
-
-    Checked up front because building the combined volume fetches every named ROI — on
-    dvid.example.org that is ~1 s each — and a typo would otherwise surface as a failure or, worse,
-    as a silently smaller set of labelled points.
-    """
-    wanted = [str(r).strip() for r in rois if str(r).strip()]
-    if not wanted:
-        raise ValueError(
-            "no ROIs given. There is deliberately no default: the combined ROI volume is "
-            "built by overwriting, so asking for every ROI on the node would label a point "
-            "in ME(L) as whichever of ME(L) / OL(L) / all_neuropils was written last.")
-    duplicated = sorted({r for r in wanted if wanted.count(r) > 1})
-    if duplicated:
-        raise ValueError(f"ROI list repeats {', '.join(duplicated)}")
-    have = set(available_rois(source))
-    missing = [r for r in wanted if r not in have]
-    if missing:
-        raise ValueError(
-            f"no roi instance on this node named {', '.join(missing)}. "
-            f"{len(have)} are available; the closest are "
-            f"{', '.join(_closest(missing[0], have))}.")
-    return wanted
-
-
-def _closest(name: str, candidates: Iterable[str], n: int = 5) -> list[str]:
-    import difflib
-
-    return difflib.get_close_matches(name, sorted(candidates), n=n, cutoff=0.4) or \
-        sorted(candidates)[:n]
+# Listing and validating ROIs, and fetching them, live in `neu_vol.dvid` (an ROI is a
+# volume); this module only samples one at synapse positions.
 
 
 #: What to do when the chosen ROIs intersect. Overlap is **expected to be small** in this
@@ -404,7 +359,7 @@ def label_point_rois(source: Mapping[str, Any], points, rois: Sequence[str], *,
     import pandas as pd
 
     try:
-        from neuclease.dvid.roi import (determine_point_rois, fetch_roi_ranges_and_boxes,
+        from neuclease.dvid.roi import (determine_point_rois,
                                         unpack_roi_ranges_to_combined_volume)
     except ImportError as exc:
         raise ImportError(MISSING) from exc
@@ -413,13 +368,12 @@ def label_point_rois(source: Mapping[str, Any], points, rois: Sequence[str], *,
         raise ValueError(f"on_overlap must be one of {', '.join(ON_OVERLAP)}; "
                          f"got {on_overlap!r}")
 
-    names = resolve_roi_set(source, rois)
     server, uuid, _instance = _vdvid.address(source)
 
-    logger.info("fetching %d ROIs", len(names))
+    logger.info("fetching %d ROIs", len(rois))
     # The fetch is the expensive half and is done once; unpacking is cheap and is what gets
     # repeated below to measure the ambiguity.
-    ranges, boxes = fetch_roi_ranges_and_boxes(server, uuid, names, processes=processes)
+    names, ranges, boxes = _vdvid.fetch_roi_ranges(source, rois, processes=processes)
     volume, box, overlaps = unpack_roi_ranges_to_combined_volume(names, ranges, boxes)
 
     overlapping = [] if overlaps is None or not len(overlaps) else [

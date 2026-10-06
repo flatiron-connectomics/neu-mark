@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from conftest import ROIS, URL, _open
+from conftest import URL, _open
 from neu_mark import dvid as ad
 from neu_mark import io, notebook as nb, ops, tables
 
@@ -14,32 +14,8 @@ def _src():
     return {"backend": "dvid", **parse_url(URL)}
 
 
-# --------------------------------------------------------------------------- #
-# validating the ROI set before anything expensive
-# --------------------------------------------------------------------------- #
-def test_available_rois_lists_the_roi_instances(dvid_server):
-    assert ad.available_rois(_open()) == sorted(ROIS)
-
-
-def test_a_typo_is_caught_up_front_with_close_matches(dvid_server):
-    """Checked before the combined volume is built, since that fetches every named ROI."""
-    with pytest.raises(ValueError, match=r"named ME\(Q\)"):
-        ad.resolve_roi_set(_open(), ["ME(L)", "ME(Q)"])
-
-
-def test_an_empty_roi_set_explains_why_there_is_no_default(dvid_server):
-    with pytest.raises(ValueError, match="deliberately no default"):
-        ad.resolve_roi_set(_open(), [])
-
-
-def test_a_repeated_roi_is_refused(dvid_server):
-    with pytest.raises(ValueError, match=r"repeats ME\(L\)"):
-        ad.resolve_roi_set(_open(), ["ME(L)", "ME(L)"])
-
-
-def test_the_order_given_is_preserved(dvid_server):
-    """It decides which ROI wins in an accepted overlap, so it must not be sorted."""
-    assert ad.resolve_roi_set(_open(), ["OL(L)", "ME(L)"]) == ["OL(L)", "ME(L)"]
+# Listing and validating the ROI set moved to neu-vol with the functions
+# (neu-vol/tests/test_dvid_roi.py).
 
 
 # --------------------------------------------------------------------------- #

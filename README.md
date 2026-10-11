@@ -203,9 +203,9 @@ in for a full URL. It is a **URL builder, not a fallback**: nothing consults it 
 `@name` is required so a saved command visibly depends on it, and both the CLI and the
 library print what a reference resolved to.
 
-It is found as `neu-mark.toml` in the working directory **or any parent**, so one file at
-the workspace root serves every repo and every notebook subdirectory beneath it — the way
-`pyproject.toml` is found. `$NEU_MARK_CONFIG` overrides. There is deliberately **no
+It is found as `neu-mark.toml` or `configs/neu-mark.toml` in the working directory **or any
+parent**, so one file at the workspace root serves every repo and every notebook
+subdirectory beneath it — the way `pyproject.toml` is found. `$NEU_MARK_CONFIG` overrides. There is deliberately **no
 machine-wide location**: a hidden `~/.config` file applies to every shell on the host and is
 the kind of invisible state that makes one command behave differently for two people.
 

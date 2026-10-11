@@ -129,6 +129,29 @@ def test_the_nearest_config_wins(tmp_path, monkeypatch):
     assert config.load().server == "nearer"
 
 
+def test_it_is_found_in_a_configs_subdirectory_on_the_way_up(tmp_path, monkeypatch):
+    """A workspace that keeps its site configs together in `configs/`; rules modules
+    named in it resolve against the config's own directory, i.e. inside `configs/`."""
+    monkeypatch.delenv(config.ENV_VAR, raising=False)
+    (tmp_path / config.SUBDIR).mkdir()
+    path = tmp_path / config.SUBDIR / config.FILENAME
+    path.write_text(TOML)
+    deep = tmp_path / "scripts" / "eval"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    assert config.find() == str(path)
+    assert config.load().rule_set("wasp") == str(tmp_path / config.SUBDIR / "rules" / "wasp_rules.py")
+
+
+def test_a_bare_config_beats_one_in_configs_at_the_same_level(tmp_path, monkeypatch):
+    monkeypatch.delenv(config.ENV_VAR, raising=False)
+    (tmp_path / config.SUBDIR).mkdir()
+    (tmp_path / config.SUBDIR / config.FILENAME).write_text('[dvid]\nserver = "sub"\n')
+    (tmp_path / config.FILENAME).write_text('[dvid]\nserver = "bare"\n')
+    monkeypatch.chdir(tmp_path)
+    assert config.load().server == "bare"
+
+
 def test_there_is_no_machine_wide_location(tmp_path, monkeypatch):
     """A hidden ~/.config file applies to every shell on the host and is the kind of
     invisible state that makes one command behave differently for two people."""

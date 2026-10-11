@@ -15,9 +15,10 @@ way, so a config can never make an export less traceable.
 Search order (first hit wins):
 
 1. ``$NEU_MARK_CONFIG``
-2. ``neu-mark.toml`` in the current directory **or any parent** — so one file at the
-   workspace root serves every repo and every notebook subdirectory under it, the way
-   ``pyproject.toml`` and ``.git`` are found.
+2. ``neu-mark.toml`` — or ``configs/neu-mark.toml`` — in the current directory **or any
+   parent**, so one file at the workspace root serves every repo and every notebook
+   subdirectory under it, the way ``pyproject.toml`` and ``.git`` are found. At each level
+   the bare file wins over the one in ``configs/``.
 
 There is deliberately **no machine-wide location**. A config in the tree is one you trip over
 while working, next to the body lists and the notes it goes with; a hidden one in
@@ -64,6 +65,9 @@ from typing import Any, Mapping
 #: ever found, other than $NEU_MARK_CONFIG — see the module docstring for why there is
 #: no machine-wide location.
 FILENAME = "neu-mark.toml"
+
+#: Also looked in at every level, so a workspace can keep its site configs together.
+SUBDIR = "configs"
 
 #: The environment variable that overrides the search entirely.
 ENV_VAR = "NEU_MARK_CONFIG"
@@ -155,7 +159,8 @@ class Config:
         if name not in self.instances and not self.server:
             raise ValueError(
                 f"--src {value!r} is a config reference, but no config was found. Looked at "
-                f"${ENV_VAR}, then for {FILENAME} in the working directory and every parent.")
+                f"${ENV_VAR}, then for {FILENAME} (or {SUBDIR}/{FILENAME}) in the working "
+                f"directory and every parent.")
         if name not in self.instances:
             # Allowed, but say so: a typo would otherwise become a request for a
             # nonexistent DVID instance and fail much further along.
@@ -176,8 +181,8 @@ def _read(path: Path) -> dict:
 def find(start: str | Path | None = None) -> str | None:
     """The config file that would be used, or ``None``.
 
-    Walks up from ``start`` (the cwd by default) looking for :data:`FILENAME`, then falls
-    back to :data:`SEARCH`.
+    Walks up from ``start`` (the cwd by default) looking for :data:`FILENAME`, or for it
+    inside :data:`SUBDIR`, at each level.
     """
     explicit = os.environ.get(ENV_VAR)
     if explicit:
@@ -193,9 +198,9 @@ def find(start: str | Path | None = None) -> str | None:
         here = here.parent
     # `here` then all parents, nearest first — so a repo-local file beats a workspace one.
     for directory in (here, *here.parents):
-        candidate = directory / FILENAME
-        if candidate.is_file():
-            return str(candidate)
+        for candidate in (directory / FILENAME, directory / SUBDIR / FILENAME):
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
